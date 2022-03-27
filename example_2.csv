@@ -1,0 +1,4 @@
+"","ID","Start_Time1","End_Time1","Name1","Dose1","Freq1","Route1","Reason","Start_Time2","End_Time2","Name2","Dose2","Freq2","Route2"
+"1","1","2022-03-05 07:00","2022-03-06 07:00","Amoxicillin","500mg","Four times a day","IV","Sepsis","NA","NA","NA","NA","NA","NA"
+"2","1","2022-03-06 07:00","2202-03-07 16:00","Flucloxicillin","1g","Four times a day","Oral","Cellulitis","NA","NA","NA","NA","NA","NA"
+"3","2","2022-03-07 09:00","2022-03-07 14:30","Clarithromycin","1g","Three times a day","Oral","CAP","2022-03-07 09:00","2022-03-07 14:30","Benzylpenicillin","1g","Three times a day","IV"
