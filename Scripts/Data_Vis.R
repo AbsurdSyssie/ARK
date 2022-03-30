@@ -20,72 +20,99 @@ barplot(table(freq_abx))
 arrange(freq_abx$n, decreasing = TRUE) %>%
   print()
 
-barplot(table(Clean_Data$Name, Clean_Data$Reason.given)) +
-  scale_x_discrete(guide = guide_axis(n.dodge=3))  
+  barplot(table(Clean_Data$Name, Clean_Data$Reason.given)) +
+    scale_x_discrete(guide = guide_axis(n.dodge=3))  
+  
+  
+  
+  pie_data <- sort(freq_abx$n, decreasing = TRUE) %>%
+    print()
+  ggplot(pie_data)
+  
+  
+  #top ten prescriptions
+  ggplot(data=pop_abx, aes(y=reorder(Name, -n), x = n)) +
+    # if wanting abx name on x axis- scale_x_discrete(guide = guide_axis(n.dodge=3)) +
+    geom_bar(stat = "identity", fill="Steel Blue", colour="black") +
+    xlab("Prescriptions on Lilac | 06-Dec-21 : 07-Mar-21") + ylab("Antibiotic") 
+  #top ten indications
+  pop_indic <- Clean_Data %>%
+    count(Reason.given) %>%
+    top_n(5)
+  #make graph of top ten indications
+  ggplot(pop_indic, aes(x =reorder(Reason.given, -n), y = n)) +
+    scale_x_discrete(guide = guide_axis(n.dodge=6)) +
+    geom_bar(stat = "identity")
+  
+  #line graph?
+  ggplot(pop_agent_by_date, aes(x=Prescription.start, y=Cum_n, group = Name, color = Name)) +
+    geom_smooth()
+  ggsave("test.pdf", height = 9, width = 18, units ="in", dpi = 400)
+  
+  #indications over time
+  indic_over_time_line <- ggplot(indic_by_date, aes(x = Prescription.start, y = cum_n, group = Reason.given, colour = Reason.given)) +
+    geom_smooth()+
+    ylim(0,700)+
+    xlim(as.Date(c("2021-12-06","2022-04-01"))) +
+    scale_color_discrete("Indication", labels = c("Community Acquired Pneumonia" = "CAP",
+                                                  "Infective Exacerbation Of Chronic Obstructive Pulmonary Disease" = "IECOPD",
+                                                  "Lower Respiratory Tract Infection" = "LRTI",
+                                                  "Urinary Tract Infection" = "UTI",
+                                                  "Healthcare Associated Pneumonia" = "HAP")) +
+    labs(x = "Date" , y = "Cumulative Prescriptions")
+  
+  Clean_Data %>%
+    ggplot() + 
+    geom_bar(aes(y = n, x = pop_indic, fill = Name),stat="identity")
+  
+  #stacked bar graph, abx by indic
+  Abx_indic_stacked <- agent_by_reason %>%
+    filter(Name %in% pop_abx$Name) %>%
+    mutate(Reason.given = str_to_title(Reason.given)) %>%
+    mutate(Name = str_to_title(Name)) 
+  
+  Abx_indic_stacked %>% 
+    ggplot(aes(x = reorder(Reason.given, -n), y = n, fill =Name)) +
+    theme(axis.text.x = element_text(angle = 15, vjust = 0.6)) +
+    geom_bar(position='stack', stat='identity') +
+    labs(x= "Indication", y= "No of Prescriptions", title="Proportion of Antibiotics by Indication") +
+    scale_x_discrete("Indication", labels = c("Community Acquired Pneumonia" = "CAP",
+                                              "Infective Exacerbation Of Chronic Obstructive Pulmonary Disease" = "IECOPD",
+                                              "Lower Respiratory Tract Infection" = "LRTI",
+                                              "Urinary Tract Infection" = "UTI",
+                                              "Healthcare Associated Pneumonia" = "HAP"))
+  
+  
+  Clean_Data %>%
+    select(NHS., Prescription.start,Name, Route, Reason.given,  ) %>%
+    arrange(Prescription.start, descending = FALSE) %>%
+    head()
+  my_plot <- (Abx_indic_stacked/indic_over_time_line)
+  
+  
+  
+  #get the prescriptions lined up by their start times and find the short rx on that day
+  percent_short_over_time <- Clean_Data %>% 
+    mutate(under_72 = Prescription_Length <= 72) %>% 
+    mutate(rn = row_number()) %>% 
+    mutate(running_total = cumsum(under_72)) %>% 
+    mutate(percent_short = (running_total/rn)*100) %>% 
+    select(Prescription.start,Prescription_Length,under_72,rn,running_total,percent_short)
+  
+  write.csv(percent_short_over_time, "percent_short_over_time.csv")
+  
+  #ark reveiw
+  
+  percent_in_month %>% 
+    ggplot(aes(x = rx_in_month.Prescription.start, y = percent_short)) +
+    ylim(0,100)+
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Prescriptions Stopped or Changed Within 72 Hours, Lilac Ward Dec '21 - Mar '22") +
+    geom_bar(stat = "identity", colour = "black") 
 
-Clean_Data <- read.csv("CLEAN_DATA\\Clean_data.csv")
-Clean_Data <- select(Clean_Data,-X)
-
-pie_data <- sort(freq_abx$n, decreasing = TRUE) %>%
-                     print()
-ggplot(pie_data)
-
-
-#top ten prescriptions
-ggplot(data=pop_abx, aes(y=reorder(Name, -n), x = n)) +
-# if wanting abx name on x axis- scale_x_discrete(guide = guide_axis(n.dodge=3)) +
-  geom_bar(stat = "identity", fill="Steel Blue", colour="black") +
-  xlab("Prescriptions on Lilac | 06-Dec-21 : 07-Mar-21") + ylab("Antibiotic") 
-#top ten indications
-pop_indic <- Clean_Data %>%
-  count(Reason.given) %>%
-  top_n(5)
-#make graph of top ten indications
-ggplot(pop_indic, aes(x =reorder(Reason.given, -n), y = n)) +
-  scale_x_discrete(guide = guide_axis(n.dodge=6)) +
-  geom_bar(stat = "identity")
-
-#line graph?
-ggplot(pop_agent_by_date, aes(x=Prescription.start, y=Cum_n, group = Name, color = Name)) +
-  geom_smooth()
-ggsave("test.pdf", height = 9, width = 18, units ="in", dpi = 400)
-
-#indications over time
-indic_over_time_line <- ggplot(indic_by_date, aes(x = Prescription.start, y = cum_n, group = Reason.given, colour = Reason.given)) +
-  geom_smooth()+
-  ylim(0,700)+
-  xlim(as.Date(c("2021-12-06","2022-04-01"))) +
-  scale_color_discrete("Indication", labels = c("Community Acquired Pneumonia" = "CAP",
-                                                                  "Infective Exacerbation Of Chronic Obstructive Pulmonary Disease" = "IECOPD",
-                                                                  "Lower Respiratory Tract Infection" = "LRTI",
-                                                                  "Urinary Tract Infection" = "UTI",
-                                                                  "Healthcare Associated Pneumonia" = "HAP")) +
-  labs(x = "Date" , y = "Cumulative Prescriptions")
-
-Clean_Data %>%
-  ggplot() + 
-  geom_bar(aes(y = n, x = pop_indic, fill = Name),stat="identity")
-
-#stacked bar graph, abx by indic
-Abx_indic_stacked <- agent_by_reason %>%
-  filter(Name %in% pop_abx$Name) %>%
-  mutate(Reason.given = str_to_title(Reason.given)) %>%
-  mutate(Name = str_to_title(Name)) 
-
-Abx_indic_stacked %>% 
-ggplot(aes(x = reorder(Reason.given, -n), y = n, fill =Name)) +
-  theme(axis.text.x = element_text(angle = 15, vjust = 0.6)) +
-  geom_bar(position='stack', stat='identity') +
-  labs(x= "Indication", y= "No of Prescriptions", title="Proportion of Antibiotics by Indication") +
-  scale_x_discrete("Indication", labels = c("Community Acquired Pneumonia" = "CAP",
-      "Infective Exacerbation Of Chronic Obstructive Pulmonary Disease" = "IECOPD",
-       "Lower Respiratory Tract Infection" = "LRTI",
-        "Urinary Tract Infection" = "UTI",
-      "Healthcare Associated Pneumonia" = "HAP"))
-
-
-Clean_Data %>%
-  select(NHS., Prescription.start,Name, Route, Reason.given,  ) %>%
-  arrange(Prescription.start, descending = FALSE) %>%
-  head()
-my_plot <- (Abx_indic_stacked + indic_over_time_line)
+  percent_in_week %>% 
+    ggplot(aes(x = rx_in_week.Prescription.start, y = percent_short)) +
+    ylim(0,100)+
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Prescriptions Stopped Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
+    geom_bar(stat = "identity") +
+    geom_smooth()
+    

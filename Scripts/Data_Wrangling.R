@@ -2,15 +2,12 @@ library(ggstatsplot)
 library(tidytext)
 library(stringr)
 library(tidyverse)
-Clean_Data %>%
-  filter(grepl("*CRAMPS*", Reason.given)| grepl("COMMUNITY", Reason.given)) %>%
-  print()
-
 
 #find top n most frequently prescribed abx
 pop_abx <- Clean_Data %>%
   count(Name) %>%
-  top_n(10)
+  top_n(10) %>%
+  print()
 
 mean_rx_length <- Clean_Data %>%
    group_by(Reason.given) %>%
@@ -19,19 +16,18 @@ mean_rx_length <- Clean_Data %>%
 
 
 under_72 <- Clean_Data %>% 
-  filter(Prescription_Length <= 72) %>% 
-  count() %>% 
+  count(Prescription_Length <= 72) %>% 
   print()
 
-proportion_under_72 <- (under_72 / nrow(Clean_Data)) *100
- 
+proportion_under_72 <- (under_72[2,] / sum()) *100
+
 
 Clean_Data %>%
- group_by(Reason.given) %>%
-   summarise(Prescription_Length) %>% 
-   arrange(-Prescription_Length) %>%
-   print()
- 
+  group_by(Reason.given) %>%
+  summarise(Prescription_Length) %>% 
+  arrange(-Prescription_Length) %>%
+  print()
+
 by_Reason <- Clean_Data%>%
   group_by(Reason.given) %>%
   select(NHS.,Reason.given,Name,Dose,Prescription_Length) %>%
@@ -59,16 +55,16 @@ pop_indic <- Clean_Data %>%
   top_n(10)
 
 #standard diff  
-Clean_Data%>%
-  summarise(sd(Prescription_Length), mean(Prescription_Length))
-
-  Clean_Data %>%
+(Clean_Data%>%
+    summarise(sd(Prescription_Length), mean(Prescription_Length))
+)
+Clean_Data %>%
   group_by(Reason.given) %>%
   summarise(sd(Prescription_Length), mean(Prescription_Length)) %>%
   print()
-  
+
 str(Clean_Data$Name)
-  #create table of prescription event
+#create table of prescription event
 prescription_events <- data.frame(PID = Clean_Data$NHS., indication = char, rx_1 = char, rx_2 = char)
 
 
@@ -101,12 +97,12 @@ indic_by_date <- indic_by_date %>%
 #find totals over time  
 indic_by_date <- indic_by_date  %>% 
   mutate(Reason.given = str_to_title(Reason.given)) %>% 
-    group_by(Reason.given) %>% 
-   mutate(cum_n = cumsum(n))
+  group_by(Reason.given) %>% 
+  mutate(cum_n = cumsum(n))
 
-#line up all rows per patient for the same indication
+#line up all rows per patient for the same indication by pivoting wide
 abx_per_indication <- Clean_Data%>% 
- # filter(Prescription.start < 2022-02-01) %>%
+  # filter(Prescription.start < 2022-02-01) %>%
   group_by(NHS., Reason.given) %>% 
   mutate(rn = row_number()) %>%
   pivot_wider(values_from = c(Name,Route,Prescription.start,Prescription.end, Dose, 
@@ -118,8 +114,12 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_1 =="Oral" & Route_2 =="Intravenous"  ~ 'Oral to IV Switch',
                                 Route_1 =="Intravenous" & Route_2 == "Intravenous" & is.na(Route_3)  ~ 'Finalised as IV',
                                 Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3)  ~ 'Finalised as Oral',
-                                Route_1 =="Intravenous" & is.na(Route_2) ~ 'Stopped as IV',
-                                Route_1 =="Oral" & is.na(Route_2)  ~ 'Stopped as Oral',
+                                Route_1 =="Oral" & is.na(Route_2)  ~ 'Finalised as Oral',
+                                Route_1 =="Intravenous" & is.na(Route_2)  ~ 'Finalised as IV',
+                                Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
+                                Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
+                                Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
+                                Route_1 =="Oral" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
                                 Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2  ~ 'No Change',
                                 Route_1 == Route_2 & Name_1 != Name_2  ~ ('Agent changed'),
                                 Route_1 == Route_2 & Dose_1 != Dose_2 | Frequency_1 != Frequency_2 ~ ('Regiment changed'),
@@ -131,8 +131,10 @@ abx_per_indication <- abx_per_indication %>%
   mutate(Decision_2 = case_when(Route_2 =="Intravenous" & Route_3 =="Oral" ~ 'IV to Oral Switch',
                                 Route_2 =="Oral" & Route_3 =="Intravenous"  ~ 'Oral to IV Switch',
                                 Route_2 =="Intravenous" & Route_3 == "Intravenous" & is.na(Route_4)  ~ 'Finalised as IV',
-                                Route_2 =="Oral" & Route_3 == "Oral" & is.na(Route_4)  ~ 'Finalised as Oral',
-                                Route_2 =="Intravenous" & is.na(Route_3) ~ 'Stopped as IV',
+                                Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 <=72 ~ 'Stopped as IV within 72 hours',
+                                Route_2 =="Oral" & is.na(Route_3)  & Prescription_Length_2 <=72 ~ 'Stopped as Oral within 72 hours',
+                                Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as IV beyond 72 hours',
+                                Route_2 =="Oral" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as Oral beyond 72 hours',
                                 Route_2 =="Oral" & is.na(Route_3)  ~ 'Stopped as Oral',
                                 Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3  ~ 'No Change',
                                 Route_2 == Route_3 & Name_2 != Name_3  ~ 'Agent changed',
@@ -146,8 +148,10 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_3 =="Oral" & Route_4 =="Intravenous"  ~ 'Oral to IV Switch',
                                 Route_3 =="Intravenous" & Route_4 == "Intravenous" & is.na(Route_3)  ~ 'Finalised as IV',
                                 Route_3 =="Oral" & Route_4 == "Oral" & is.na(Route_3)  ~ 'Finalised as Oral',
-                                Route_3 =="Intravenous" & is.na(Route_4) ~ 'Stopped as IV',
-                                Route_3 =="Oral" & is.na(Route_4)  ~ 'Stopped as Oral',
+                                Route_3 =="Intravenous" & is.na(Route_4) & Prescription_Length_3 <= 72 ~ 'Stopped as IV within 72 hours',
+                                Route_3 =="Oral" & is.na(Route_4)  & Prescription_Length_3 <= 72 ~ 'Stopped as Oral within 72 hours',
+                                Route_3 =="Intravenous" & is.na(Route_4) & Prescription_Length_3 > 72 ~ 'Stopped as IV beyond 72 hours',
+                                Route_3 =="Oral" & is.na(Route_4) & Prescription_Length_3 > 72 ~ 'Stopped as Oral beyond 72 hours',
                                 Route_3 == Route_4 & Name_3 == Name_4 & Dose_3 == Dose_4 & Frequency_3 == Frequency_4  ~ 'No Change',
                                 Route_3 == Route_4 & Name_3 != Name_4  ~ ('Agent changed'),
                                 Route_3 == Route_4 & Dose_3 != Dose_4 | Frequency_3 != Frequency_4 ~ ('Regiment changed'),
@@ -155,14 +159,24 @@ abx_per_indication <- abx_per_indication %>%
                                 TRUE ~ 'something else'
   ))
 
+Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 <=72 ~ 'Stopped as IV within 72 hours',
+Route_2 =="Oral" & is.na(Route_3)  & Prescription_Length_2 <=72 ~ 'Stopped as Oral within 72 hours',
+Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as IV beyond 72 hours',
+Route_2 =="Oral" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as Oral beyond 72 hours',
+
+Route_1 =="Intravenous" & is.na(Route_4) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
+Route_1 =="Oral" & is.na(Route_4) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
+#ark_results <- abx_per_indication %>% 
+ # select(c(Name_1,Route_1, Name_2,Route_2, Name_3,Route_3,Name_4,Route_4,Decision_1,Decision_2,Decision_3,ARK.category_1,ARK.category_2,ARK.category_3,ARK.category_4)) %>% 
+ # arrange(Name_4, Name_3, Name_2)
 
 ark_results <- abx_per_indication %>% 
- select(c(Name_1,Route_1, Name_2,Route_2, Name_3,Route_3,Name_4,Route_4,Decision_1,Decision_2,Decision_3,ARK.category_1,ARK.category_2,ARK.category_3,ARK.category_4)) %>% 
+  select(c(Name_1,Route_1, Name_2,Route_2, Name_3,Route_3,Name_4,Route_4,Decision_1,Decision_2,Decision_3,Prescription_Length_1,Prescription_Length_2,Prescription_Length_3,Prescription_Length_4)) %>% 
   arrange(Name_4, Name_3, Name_2)
 
 single_rx <- ark_results %>% 
   filter(is.na(Name_2)) %>% 
-  select(c(Name_1,Route_1,Decision_1))
+  select(c(Name_1,Route_1,Decision_1,Prescription_Length_1))
 
 double_rx <- ark_results %>% 
   filter(is.na(Name_3)) %>% 
@@ -174,3 +188,47 @@ triple_rx <- ark_results %>%
 
 quad_rx <- ark_results %>% 
   filter(!is.na(Name_4))
+#under_72 <- under_72 %>%   mutate(under_72 = Prescription_Length <= 72)
+#under_72 <-  under_72 %>% 
+#  group_by(Prescription.start) %>% 
+#  mutate(rn = row_number())  
+#under_72 <-  under_72 %>%   select(c(Prescription.start,Prescription_Length)) 
+
+
+#floor all rx dates so they are organised by month. 
+#then count the number in each month
+rx_in_month <- select(Clean_Data, c(Prescription.start,Prescription_Length))
+
+rx_in_month$Prescription.start <- floor_date(rx_in_month$Prescription.start, "month")
+
+rx_in_month <- rx_in_month %>%  group_by(Prescription.start) %>%  count(Prescription.start)
+
+#do the same as above, but then look for only the rx under 72hrs
+rx_under_month <- select(Clean_Data, c(Prescription.start,Prescription_Length))
+rx_under_month$Prescription.start <- (floor_date(rx_under_month$Prescription.start, "month")) 
+rx_under_month <- rx_under_month %>% mutate(short_rx = Prescription_Length <= 72)
+rx_under_month <- rx_under_month %>% 
+  filter(short_rx == TRUE) 
+rx_under_month <- rx_under_month %>%  group_by(Prescription.start)  %>%  count(short_rx)
+
+
+#group_by(rx_under_month$Prescription.start) %>% count(rx_under_month$rx)
+
+
+count(short) #count(Prescription_Length <= 72)
+percent_in_month <- data.frame(rx_in_month$Prescription.start) 
+percent_in_month <- percent_in_month %>%  mutate(percent_short = rx_under_month$n/rx_in_month$n *100)
+
+
+under_72 <- under_72 %>%
+  mutate(running_total = cumsum(under_72)) %>% 
+  mutate(percent_short = (running_total/rn)*100)
+
+under_72 <- under_72 %>% 
+  group_by(Prescription.start) %>% 
+  # summarise(percent_short) %>% 
+  pivot_wider(names_from = Prescription.start, values_from = percent_short) %>% 
+  view()
+
+proportion_under_72 <- (under_72 / nrow(Clean_Data)) *100
+

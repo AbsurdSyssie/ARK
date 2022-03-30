@@ -17,11 +17,11 @@ Clean_Data$Reason.given <-str_to_upper(Clean_Data$Reason.given, locale ="en")
 Clean_Data <- Clean_Data[!duplicated(Clean_Data), ]
 
 #change NHS# into an arbitrary Patient ID No
-PID <- Clean_Data[1] %>%                                        # Create ID by group
+PID <- Clean_Data %>%                                        # Create ID by group
   group_by(NHS.) %>%
   mutate(ID = cur_group_id())
-#make NHS# the ID number
-Clean_Data$NHS. <- PID$ID 
+
+Clean_Data$NHS. <- PID$ID
 
 #make columns dates not characters
 Clean_Data$Prescription.start <- dmy_hm(Clean_Data$Prescription.start) 
@@ -34,10 +34,11 @@ Clean_Data <- Clean_Data %>%
   print()
 
 
-#remove prescriptions over 1000 hours long
+#remove prescriptions before Dec 1st and ending after 2022
 Clean_Data <- Clean_Data %>%
-  filter(Prescription_Length < 1000) %>%
-  print()
+  filter(!Prescription.start <= as.POSIXct.Date("2021-12-01") )
+
+| Prescription.end > as.POSIXct.Date("2022-12-31"))
 
 #find all the prescriptions which were over 72 hours long
 
@@ -47,15 +48,10 @@ Clean_Data <- Clean_Data %>%
 #find the percentage of prescriptions which were overdue
 
 #find all distinct indications for an abx
-data.frame(indication = c(distinct(Clean_Data,Clean_Data$Reason.given))) %>%
-print()
+data.frame(indications = c(distinct(Clean_Data,Clean_Data$Reason.given))) %>%
+print(indications)
 
-#try to reduce duplicates
-Clean_Data %>%
-  group_by(NHS.,Prescription.start,Prescription.end) %>%
-  print()
-
-#exclude obviously incorrect values
+indications <- distinct(Clean_Data ,Clean_Data$Reason.given)
 
 
 
@@ -82,16 +78,31 @@ Clean_Data %>%
   Clean_Data$Reason.given <- gsub("PYONEPHRITIS", "PYELONEPHRITIS", Clean_Data$Reason.given) %>%
     print()         
   
-  #remove any stat, bleed or prophylactic abx or leg cramps
+  Clean_Data$Reason.given <- gsub("PYENOPHRENITIS", "PYELONEPHRITIS", Clean_Data$Reason.given) %>%
+    print()
+  
+ Clean_Data <- Clean_Data %>% 
+  mutate(Reason.given = gsub("C.DIFFICLE", "Clostridium Difficile", Clean_Data$Reason.given)) %>% 
+    print()
+ Clean_Data <- Clean_Data %>% 
+   mutate(Reason.given = sub("C.DIFF", "Clostridium Difficile", Clean_Data$Reason.given)) %>% 
+   print()
+ Clean_Data <- Clean_Data %>% 
+   mutate(Reason.given = sub("CLOSTRIDIUM DIFFICILE*", "Clostridium Difficile", Clean_Data$Reason.given)) %>% 
+   print()
+  
+  #remove any stat, bleed, prophylactic abx, leg cramps, hepatic encephalo
   Clean_Data <- Clean_Data %>%
     filter(!(grepl("*BLEED*", Reason.given) | grepl("*PROPHY*", Reason.given) | grepl("*CRAMP*", Reason.given) | 
-               grepl("MS", Reason.given) | grepl("*ONCE*", Frequency) | grepl("H.ENCEPH*", Reason.given))) %>%
+               grepl("MS", Reason.given) | grepl("*ONCE*", Frequency) | grepl("H.ENCEPH*", Reason.given) | grepl("*HEPATIC ENCEPHALOPATHY*", Reason.given)))  %>%
     print()
 
 #remove any rows where indication is NA
 Clean_Data <- Clean_Data %>%
   na.omit(Reason.given) 
   
+
+
   #Sometimes antibiotic treatment is stopped and then restarted within a short time. 
   # If the prescriptions are for the same indication and within 24 hours 
   #(gap of <24 hours between the last dose of original antibiotic and the first dose of new antibiotic) 
