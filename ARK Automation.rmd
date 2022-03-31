@@ -198,7 +198,7 @@ Now that we have our data fairly tidy and we have the necessary information adde
 ```{r}
 Clean_Data <- Clean_Data %>% arrange(Prescription.start) %>%  group_by(NHS.)
 
-#line up all rows per patient for the same indication by pivoting wide
+#line up all rows per patient for the same indication by pivoting wide ,
 abx_per_indication <- Clean_Data%>% 
   group_by(NHS., Reason.given) %>% 
   mutate(rn = row_number()) %>%
