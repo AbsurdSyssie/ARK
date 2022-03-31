@@ -12,7 +12,6 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 ```
 
 #### **Preamble**
-Did this work?
 
 Call libraries, set numbers not to display as exponents and import raw data
 
@@ -243,7 +242,7 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_2 =="Oral" & is.na(Route_3)  ~ 'Stopped as Oral',
                                 Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3  ~ 'No Change',
                                 Route_2 == Route_3 & Name_2 != Name_3  ~ 'Agent changed',
-                                Decision_1 == "Stopped as Oral" | Decision_1 == "Stopped as IV" | Decision_1 == "" ~ "",
+                                Decision_1 == "Stopped as Oral" | Decision_1 == "Stopped as IV" | Decision_1 == "" ~ (""),
                                 Route_2 == Route_3 & Dose_2 != Dose_3 | Frequency_2 != Frequency_3 ~ ('Regiment changed'),
                                 TRUE ~ 'something else'
   ))
@@ -259,8 +258,9 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_3 =="Oral" & is.na(Route_4) & Prescription_Length_3 > 72 ~ 'Stopped as Oral beyond 72 hours',
                                 Route_3 == Route_4 & Name_3 == Name_4 & Dose_3 == Dose_4 & Frequency_3 == Frequency_4  ~ 'No Change',
                                 Route_3 == Route_4 & Name_3 != Name_4  ~ ('Agent changed'),
+                                
                                 Route_3 == Route_4 & Dose_3 != Dose_4 | Frequency_3 != Frequency_4 ~ ('Regiment changed'),
-                                Decision_2 == "Stopped as Oral" | Decision_2 == "Stopped as IV" | Decision_2 =="" ~ "",
+                                Decision_2 == "Stopped as Oral" | Decision_2 == "Stopped as IV" | Decision_2 =="" ~ (""),
                                 TRUE ~ 'something else'
   ))
 ```
@@ -343,7 +343,7 @@ percent_stopped_72 <- nrow(stopped_less_72) / nrow(ark_results) *100
 Now we want to see the previous result broken down by week
 
 ```{r}
-rx_under_week_stopped <- select(single_rx, c(Prescription.start_1,Prescription_Length_1))
+rx_under_week_stopped <- select(single_rx, c(Prescription.start_1,Prescription_Length_1,Route_1))
 rx_under_week_stopped$Prescription.start_1 <- 
   (floor_date(rx_under_week_stopped$Prescription.start_1, "week")) 
 rx_under_week_stopped <- rx_under_week_stopped %>% mutate(short_rx = Prescription_Length_1 <= 72)
@@ -356,7 +356,7 @@ rx_under_week_stopped <- rx_under_week_stopped %>%  group_by(Prescription.start_
 Then we can find the total number of courses each week
 
 ```{r}
-rx_in_week <- select(Clean_Data, c(Prescription.start,Prescription_Length))
+rx_in_week <- select(Clean_Data, c(Prescription.start,Prescription_Length,Route))
 
 rx_in_week$Prescription.start <- floor_date(rx_in_week$Prescription.start, "week")
 
@@ -366,7 +366,7 @@ rx_in_week <- rx_in_week %>%  group_by(Prescription.start) %>%  count(Prescripti
 Then compare them against each other
 
 ```{r}
-percent_in_week <- data.frame(rx_in_week$Prescription.start) %>%  mutate(percent_short = rx_under_week_stopped$n/rx_in_week$n *100)
+percent_in_week_stopped <- data.frame(rx_in_week$Prescription.start) %>%  mutate(percent_short = rx_under_week_stopped$n/rx_in_week$n *100)
 ```
 
 # Data Visualisation
@@ -432,9 +432,15 @@ percent_in_month %>%
 Percent of people who had a total course of less than or equal to 72 hours, by week;
 
 ```{r}
-percent_in_week %>% 
+percent_in_week_stopped %>% 
     ggplot(aes(x = rx_in_week.Prescription.start, y = percent_short)) +
     ylim(0,100)+
     labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Antibiotic Courses Stopped Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
     geom_bar(stat = "identity", colour = "black")
 ```
+Then we can work out the number of people who had their prescription changed to another agent, and what percentage of those people had their first switch in <=72 hours.
+
+```{r}
+
+```
+
