@@ -196,7 +196,9 @@ indic_by_date <- indic_by_date  %>%
 Now that we have our data fairly tidy and we have the necessary information added, we want to arrange the data in a way which will reflect the way the ark project wants the data to look;
 
 ```{r}
-#line up all rows per patient for the same indication by pivoting wide
+Clean_Data <- Clean_Data %>% arrange(Prescription.start) %>%  group_by(NHS.)
+
+#line up all rows per patient for the same indication by pivoting wide ,
 abx_per_indication <- Clean_Data%>% 
   group_by(NHS., Reason.given) %>% 
   mutate(rn = row_number()) %>%
@@ -218,8 +220,7 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_1 =="Oral" & Route_2 =="Intravenous"  ~ 'Oral to IV Switch',
                                 Route_1 =="Intravenous" & Route_2 == "Intravenous" & is.na(Route_3)  ~ 'Finalised as IV',
                                 Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3)  ~ 'Finalised as Oral',
-                                Route_1 =="Oral" & is.na(Route_2)  ~ 'Finalised as Oral',
-                                Route_1 =="Intravenous" & is.na(Route_2)  ~ 'Finalised as IV',
+                               
                                 Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
                                 Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
                                 Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
@@ -242,7 +243,7 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_2 =="Oral" & is.na(Route_3)  ~ 'Stopped as Oral',
                                 Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3  ~ 'No Change',
                                 Route_2 == Route_3 & Name_2 != Name_3  ~ 'Agent changed',
-                                Decision_1 == "Stopped as Oral" | Decision_1 == "Stopped as IV" | Decision_1 == "" ~ (""),
+                                Decision_1 == "Finalised as Oral" | Decision_1 == "Finalised as IV"  ~ (""),
                                 Route_2 == Route_3 & Dose_2 != Dose_3 | Frequency_2 != Frequency_3 ~ ('Regiment changed'),
                                 TRUE ~ 'something else'
   ))
@@ -260,7 +261,7 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_3 == Route_4 & Name_3 != Name_4  ~ ('Agent changed'),
                                 
                                 Route_3 == Route_4 & Dose_3 != Dose_4 | Frequency_3 != Frequency_4 ~ ('Regiment changed'),
-                                Decision_2 == "Stopped as Oral" | Decision_2 == "Stopped as IV" | Decision_2 =="" ~ (""),
+                                Decision_2 == "Stopped as Oral within 72 hours" | Decision_2 == "Stopped as IV within 72 hours" | Decision_2 == "Stopped as Oral beyond 72 hours" | Decision_2 == "Stopped as IV beyond 72 hours" | Decision_2 =="" ~ (""),
                                 TRUE ~ 'something else'
   ))
 ```
@@ -391,7 +392,7 @@ Make a graph of the most common indications
  "Lower Respiratory Tract Infection" = "LRTI",
  "Urinary Tract Infection" = "UTI",
  "Healthcare Associated Pneumonia" = "HAP")) + 
-    geom_bar(stat = "identity")
+    geom_bar(stat = "identity", fill = "#F066EA")
 ```
 
 Stacked bar graph of antibiotic for each indication
@@ -426,7 +427,7 @@ percent_in_month %>%
     ggplot(aes(x = rx_in_month.Prescription.start, y = percent_short)) +
     ylim(0,100)+
     labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Prescriptions Stopped or Changed Within 72 Hours, Lilac Ward Dec '21 - Mar '22") +
-    geom_bar(stat = "identity", colour = "black") 
+    geom_bar(stat = "identity", fill = "coral") 
 ```
 
 Percent of people who had a total course of less than or equal to 72 hours, by week;
@@ -436,11 +437,62 @@ percent_in_week_stopped %>%
     ggplot(aes(x = rx_in_week.Prescription.start, y = percent_short)) +
     ylim(0,100)+
     labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Antibiotic Courses Stopped Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
-    geom_bar(stat = "identity", colour = "black")
+    geom_bar(stat = "identity", colour = "black", fill = "pink")
 ```
 Then we can work out the number of people who had their prescription changed to another agent, and what percentage of those people had their first switch in <=72 hours.
 
 ```{r}
+#get all courses where the first decision was not "finalised" or "No Change" i.e the drug was switched
+rx_switched <- ark_results %>%  filter(!grepl("Finalised", Decision_1) | (!grepl("No Change", Decision_1)))
+#floor by week to group them together
+rx_switched$Prescription.start_1 <- floor_date(rx_switched$Prescription.start_1, "week")
+#then take those and count how many there were each week
+rx_switched_week <- rx_switched %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
+#then select only the short ones
+rx_switched_short <-rx_switched %>%  filter(Prescription_Length_1 <= 72)
+#then count how many there were each week
+rx_switched_short_week <- rx_switched_short %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
+#then compare them 
+percent_in_week_switched <- data.frame(rx_switched_week$Prescription.start_1) %>%  mutate(percent_short = rx_switched_short_week$n/rx_switched_week$n *100)
 
 ```
+
+Then put them into a graph!
+
+```{r}
+percent_in_week_switched %>% 
+    ggplot(aes(x = rx_switched_week.Prescription.start_1, y = percent_short)) +
+    ylim(0,100)+
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Antibiotic Courses Switched Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
+    geom_bar(stat = "identity", colour = "black", fill = "pink")
+```
+
+Find the proportion of all prescriptions that were an IV to oral switch within 72 hours, within each week
+
+```{r}
+#get all courses where the first decision was not "finalised" or "No Change" i.e the drug was switched
+rx_switched <- ark_results %>%  filter(grepl("IV to Oral Switch", Decision_1))
+#floor by week to group them together
+rx_switched$Prescription.start_1 <- floor_date(rx_switched$Prescription.start_1, "week")
+#then take those and count how many there were each week
+rx_switched_week <- rx_switched %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
+#then select only the short ones
+rx_switched_short <-rx_switched %>%  filter(Prescription_Length_1 <= 72)
+#then count how many there were each week
+rx_switched_short_week <- rx_switched_short %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
+#then compare them 
+percent_in_week_switched <- data.frame(rx_switched_week$Prescription.start_1) %>%  mutate(percent_short = rx_switched_short_week$n/rx_in_week[1:13,2] *100)
+
+```
+
+Make a graph
+
+```{r}
+percent_in_week_switched %>% 
+    ggplot(aes(x = rx_switched_week.Prescription.start_1, y = percent_short$n)) +
+   ylim(0,25)+
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "IV to Oral switches that were within 72 Hours of the start of a course, as a percentage of all antibiotic courses | Lilac Ward Dec '21 - Mar '22") +
+    geom_bar(stat = "identity", colour = "black", fill = "pink")
+```
+what about all IV to oral switches
 
