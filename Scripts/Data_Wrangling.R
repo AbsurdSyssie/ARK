@@ -7,21 +7,12 @@ library(tidyverse)
 pop_abx <- Clean_Data %>%
   count(Name) %>%
   top_n(10) %>%
-  arrange(-n) %>% 
-  print()
-
-
-pop_decision <- abx_per_indication %>%
-  group_by(Decision_1) %>% 
-  count(Decision_1) %>%
-  top_n(10) %>%
   print()
 
 mean_rx_length <- Clean_Data %>%
    group_by(Reason.given) %>%
   summarise(mean_length = mean(Prescription_Length)) %>%
-  arrange(-mean_length) %>% 
-  print()
+  arrange(-mean_length)
 
 
 under_72 <- Clean_Data %>% 

@@ -469,7 +469,15 @@ abbreviations and correct for some spelling mistakes</p>
   
   Clean_Data$Reason.given &lt;- sub(&quot;C. DIFF&quot;, &quot;CLOSTRIDIUM DIFFICILE&quot;, Clean_Data$Reason.given)
   
-  Clean_Data$Reason.given &lt;- str_to_title(Clean_Data$Reason.given)</code></pre>
+  Clean_Data$Reason.given &lt;- str_to_title(Clean_Data$Reason.given)
+  head( select(Clean_Data, c(NHS.,Name, Reason.given)))</code></pre>
+<pre><code>##   NHS.         Name                      Reason.given
+## 1    1 Piperacillin      Community Acquired Pneumonia
+## 2    2  Amoxicillin Lower Respiratory Tract Infection
+## 3    2  Amoxicillin Lower Respiratory Tract Infection
+## 4    3  Tigecycline                               Sbp
+## 5    3 Piperacillin Serious Intra-Abdominal Infection
+## 6    3     Nystatin                       Oral Thrush</code></pre>
 </div>
 </div>
 <div id="data-wrangling" class="section level2">
@@ -518,12 +526,21 @@ pop_indic &lt;- Clean_Data %&gt;%
 <p>We are also very interested in the length of prescriptions, we can
 make a new column in our table for just that;</p>
 <pre class="r"><code>#take the difference between the start and end times of each rx, then make that a new column
-Clean_Data$Prescription_Length &lt;- interval(Clean_Data$Prescription.start, Clean_Data$Prescription.end) / hours(1)</code></pre>
+Clean_Data$Prescription_Length &lt;- interval(Clean_Data$Prescription.start, Clean_Data$Prescription.end) / hours(1)
+head(select(Clean_Data, c(NHS., Prescription_Length)))</code></pre>
+<pre><code>##   NHS. Prescription_Length
+## 1    1           50.750000
+## 2    2            1.933333
+## 3    2           34.550000
+## 4    3           25.050000
+## 5    3           27.450000
+## 6    3          375.300000</code></pre>
 <p>To help us understand what data is in each column we can look at the
 distinct values in each. This is much faster than looking through and
 making a note of what we see. For the indication this is useful to see
 if there are any common ways that things are misspelled;</p>
-<pre class="r"><code>indications &lt;- distinct(Clean_Data ,Clean_Data$Reason.given)</code></pre>
+<pre class="r"><code>indications &lt;- distinct(Clean_Data ,Clean_Data$Reason.given) %&gt;% 
+  head()</code></pre>
 <p>This can further inform our tidying process and clean up more
 commonly misspelled words and phrases.</p>
 </div>
@@ -597,7 +614,7 @@ information added, we want to arrange the data in a way which will
 reflect the way the ark project wants the data to look;</p>
 <pre class="r"><code>Clean_Data &lt;- Clean_Data %&gt;% arrange(Prescription.start) %&gt;%  group_by(NHS.)
 
-#line up all rows per patient for the same indication by pivoting wide
+#pivot wide
 abx_per_indication &lt;- Clean_Data%&gt;% 
   group_by(NHS., Reason.given) %&gt;% 
   mutate(rn = row_number()) %&gt;%

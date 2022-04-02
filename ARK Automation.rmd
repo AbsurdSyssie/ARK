@@ -9,6 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
  
 knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
 ```
 
 #### **Preamble**
@@ -74,7 +75,6 @@ Clean_Data <- filter(Clean_Data, Prescription.start >= as.POSIXct("2021-12-01 00
 Clean_Data <- filter(Clean_Data, Prescription.end < as.POSIXct("2022-12-31 00:00"))
 
 
-
   
 #remove any stat, bleed, prophylactic abx, leg cramps, hepatic encephalopathy
   Clean_Data <- Clean_Data %>%
@@ -99,21 +99,17 @@ Use some regex to normalise common indication names, remove ambiguous abbreviati
   
   #make all LRTI full name
   Clean_Data$Reason.given <- gsub("LRTI", "LOWER RESPIRATORY TRACT INFECTION", Clean_Data$Reason.given) 
-  #make any blank indications "Unkown"
+  #make any blank indications "Unknown"
   Clean_Data$Reason.given <- sub("^$", "UNKOWN", Clean_Data$Reason.given)
   
   #correct common spelling mistakes
   Clean_Data$Reason.given <- gsub("PYONEPHRITIS", "PYELONEPHRITIS", Clean_Data$Reason.given)
- 
-  Clean_Data$Reason.given <- sub("CLOSTRIDIUM DIFFICILE*", "CLOSTRIDIUM DIFFICILE", Clean_Data$Reason.given)
   
-  Clean_Data$Reason.given <- gsub("C.DIFFICLE", "CLOSTRIDIUM DIFFICILE", Clean_Data$Reason.given)
-  
-  Clean_Data$Reason.given <- sub("C.DIFF", "CLOSTRIDIUM DIFFICILE", Clean_Data$Reason.given)
-  
-  Clean_Data$Reason.given <- sub("C. DIFF", "CLOSTRIDIUM DIFFICILE", Clean_Data$Reason.given)
+  Clean_Data$Reason.given <- replace(Clean_Data$Reason.given,grep("DIFF",Clean_Data$Reason.given),"CLOSTRIDIUM DIFFICILE")
+    
   
   Clean_Data$Reason.given <- str_to_title(Clean_Data$Reason.given)
+  head( select(Clean_Data, c(NHS.,Name, Reason.given)))
 ```
 
 ## Data Wrangling
@@ -145,19 +141,25 @@ We are also very interested in the length of prescriptions, we can make a new co
 ```{r}
 #take the difference between the start and end times of each rx, then make that a new column
 Clean_Data$Prescription_Length <- interval(Clean_Data$Prescription.start, Clean_Data$Prescription.end) / hours(1)
-```
+head(select(Clean_Data, c(NHS., Prescription_Length)))
 
+ #remove any prescriptions where they could not have had more than one dose 
+
+ Clean_Data <- filter(Clean_Data, Frequency == "THREE times a DAY" & Prescription_Length > 8 | Frequency == "FOUR times a DAY" & Clean_Data$Prescription_Length > 6 | Frequency == "TWICE a DAY" & Prescription_Length > 12)
+
+```
 To help us understand what data is in each column we can look at the distinct values in each. This is much faster than looking through and making a note of what we see. For the indication this is useful to see if there are any common ways that things are misspelled;
 
 ```{r}
-indications <- distinct(Clean_Data ,Clean_Data$Reason.given)
+indications <- distinct(Clean_Data ,Clean_Data$Reason.given) %>% 
+  head()
 ```
 
 This can further inform our tidying process and clean up more commonly misspelled words and phrases.
 
 #### Find popular antibiotics and popular indications over time
 
-```{r}
+```{r find intermediate values}
 #get the agents lined up by their start times and find their frequency on that day
 agent_by_date <- Clean_Data %>%
   group_by(Prescription.start) %>%
@@ -198,7 +200,7 @@ Now that we have our data fairly tidy and we have the necessary information adde
 ```{r}
 Clean_Data <- Clean_Data %>% arrange(Prescription.start) %>%  group_by(NHS.)
 
-#line up all rows per patient for the same indication by pivoting wide ,
+#pivot wide
 abx_per_indication <- Clean_Data%>% 
   group_by(NHS., Reason.given) %>% 
   mutate(rn = row_number()) %>%
@@ -214,23 +216,41 @@ This groups the data by person and by the indication (as in ARK antibiotics shou
 As ARK wants us to record the decisions that were made between each prescription, such as IV to Oral, Oral to IV or stopped.
 
 ```{r}
+abx_per_indication <- abx_per_indication %>% 
+  mutate(interval_1 = interval(Prescription.start_1, Prescription.start_2) / hours (1),
+         interval_2 = interval(Prescription.start_2, Prescription.start_3) / hours (1),
+         interval_3 = interval(Prescription.start_1, Prescription.start_4) / hours (1),
+         interval_4 = interval(Prescription.start_1, Prescription.start_5) / hours (1),
+         interval_5 = interval(Prescription.start_1, Prescription.start_6) / hours (1),
+  )
+
+
 #classify each change as per ARK protocol
 abx_per_indication <- abx_per_indication %>% 
-  mutate(Decision_1 = case_when(Route_1 =="Intravenous" & Route_2 =="Oral" ~ 'IV to Oral Switch',
-                                Route_1 =="Oral" & Route_2 =="Intravenous"  ~ 'Oral to IV Switch',
-                                Route_1 =="Intravenous" & Route_2 == "Intravenous" & is.na(Route_3)  ~ 'Finalised as IV',
-                                Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3)  ~ 'Finalised as Oral',
-                               
-                                Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
-                                Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
-                                Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
-                                Route_1 =="Oral" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
-                                Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2  ~ 'No Change',
-                                Route_1 == Route_2 & Name_1 != Name_2  ~ ('Agent changed'),
-                                Route_1 == Route_2 & Dose_1 != Dose_2 | Frequency_1 != Frequency_2 ~ ('Regiment changed'),
+  mutate(Decision_1 = case_when(
+    Route_1 =="Intravenous" & Route_2 =="Oral" & Prescription.start_2 > Prescription.end_1 ~ 'IV to Oral Switch',
+    Route_1 =="Oral" & Route_2 =="Intravenous" & Prescription.start_2 > Prescription.end_1  ~ 'Oral to IV Switch',
+    Route_1 == "Intravenous" & Route_2 == "Intravenous" & interval_1 < 12 & 
+      Prescription_Length_1 > 12 ~ 'Dual IV therapy started',
+    Route_1 == "Intravenous" &  Route_2 == "Oral" & interval_1 < 12 & 
+      Prescription_Length_1 > 12 ~ 'IV and Oral started',
+    Route_1 =="Oral" & Route_2 == "Intravenous" & interval_1 < 12 ~ "IV and Oral started",
+    Route_1 =="Intravenous" & Route_2 == "Intravenous" & is.na(Route_3)  ~ 'Finalised as IV',
+    Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3)  ~ 'Finalised as Oral',
+    Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
+    Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
+    Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
+    Route_1 =="Oral" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
+    Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
+      Route_1 == "Oral" ~ 'Oral agent continued',
+    Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
+      Route_1 == "Intravenous" ~ 'IV agent continued',    
+    Route_1 == Route_2 & Name_1 != Name_2  ~ ('Agent changed'),
+    Route_1 == Route_2 & Dose_1 != Dose_2 & Frequency_1 != Frequency_2 ~ ('Regiment changed'),
                                 TRUE ~ 'something else'
   ))
 
+temp <- abx_per_indication %>% select(c(Name_1,Route_1,Prescription.start_1, Prescription.end_1, Decision_1, Name_2, Route_2, Prescription.start_2,Prescription.end_2,interval_1))
 
 abx_per_indication <- abx_per_indication %>% 
   mutate(Decision_2 = case_when(Route_2 =="Intravenous" & Route_3 =="Oral" ~ 'IV to Oral Switch',
@@ -261,9 +281,21 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_3 == Route_4 & Name_3 != Name_4  ~ ('Agent changed'),
                                 
                                 Route_3 == Route_4 & Dose_3 != Dose_4 | Frequency_3 != Frequency_4 ~ ('Regiment changed'),
-                                Decision_2 == "Stopped as Oral within 72 hours" | Decision_2 == "Stopped as IV within 72 hours" | Decision_2 == "Stopped as Oral beyond 72 hours" | Decision_2 == "Stopped as IV beyond 72 hours" | Decision_2 =="" ~ (""),
+                                Decision_2 == "Stopped as Oral within 72 hours" | Decision_2 == "Stopped as IV within 72 hours" | Decision_2 == "Stopped as Oral beyond 72 hours" | 
+                                  Decision_2 == "Stopped as IV beyond 72 hours" | Decision_2 =="" ~ (""),
+                                
                                 TRUE ~ 'something else'
   ))
+
+#make logic for a decision "X agent added"
+abx_per_indication <- abx_per_indication %>%  mutate(Decision_1 = case_when( 
+Route_1 == "Intravenous" & Route_2 == "Intravenous" & interval(Prescription.start_1, Prescription.start_2) / hours(1) < 12 & Prescription_Length_1 > 12 ~ 'Dual IV therapy started',
+ Route_1 == "Intravenous" &  Route_2 == "Oral" & interval(Prescription.start_1, Prescription.start_2) / hours(1) < 12 & Prescription_Length_1 > 12 ~ 'IV and Oral started',
+TRUE ~ "uh-oh"
+  ))
+
+
+
 ```
 
 We will also be able to group people by the number of prescriptions there were in their antibiotic course;
@@ -295,7 +327,7 @@ We want to know how long patients' total courses were, so let's do that;
 
 ```{r}
 #get rid of all missing values, then add course lengths together
-course_lengths <-  ark_results 
+course_lengths <-  abx_per_indication 
 
 course_lengths$Prescription_Length_2[is.na(course_lengths$Prescription_Length_2)] <- 0 
 course_lengths$Prescription_Length_3[is.na(course_lengths$Prescription_Length_3)] <- 0 
@@ -303,6 +335,17 @@ course_lengths$Prescription_Length_4[is.na(course_lengths$Prescription_Length_4)
 
 
 course_lengths <- course_lengths %>%  mutate( course_length = (Prescription_Length_1 + Prescription_Length_2 + Prescription_Length_3 + Prescription_Length_4))
+
+#make course length the difference in time from the first agent being started and the last agent being finished
+
+course_lengths <- course_lengths %>%  mutate(course_length =  case_when(
+  is.na(Name_2) ~ Prescription_Length_1,
+  is.na(Name_3) ~ interval(Prescription.start_1, Prescription.end_2)/ hours(1),
+  is.na(Name_4) ~ interval(Prescription.start_2, Prescription.end_3)/ hours(1),
+  is.na(Name_5) ~ interval(Prescription.start_3, Prescription.end_4)/ hours(1)))
+ 
+  
+
 
 #course_lengths <- course_lengths %>%  select(c(course_length, Prescription.start_1,Prescription.start_2,Prescription.start_3,Prescription.start_4))
 ```
