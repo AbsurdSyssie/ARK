@@ -239,32 +239,28 @@ abx_per_indication <- abx_per_indication %>%
     Route_1 == "Intravenous" &  Route_2 == "Oral" & interval_1 < 12 & 
       Prescription_Length_1 > 12 ~ 'IV and Oral started',
     Route_1 =="Oral" & Route_2 == "Intravenous" & interval_1 < 12 ~ "IV and Oral started",
-    interval_1 > 12  ~ paste0(Route_1, " started"),
+    interval_1 > 12 | is.na(interval_1) | Prescription_Length_1 <=12 ~ paste0(Route_1, " started"),
     
 
                                 TRUE ~ 'something else'
   ))
 
-temp <- abx_per_indication %>% select(c(Name_1,Route_1,Prescription.start_1, Prescription.end_1, Decision_1, Name_2, Route_2, Prescription.start_2,Prescription.end_2,interval_1))
+temp <- abx_per_indication %>% select(c(Name_1,Route_1,Prescription.start_1, Prescription.end_1, Decision_1, Decision_2, Name_2, Route_2, Prescription.start_2,Prescription.end_2,interval_1))
 
 #what happened after the initial prescription
 
 abx_per_indication <- abx_per_indication %>% 
   mutate(Decision_2 = case_when(
-        Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
-        Route_1 == "Oral" ~ 'Oral agent continued',
-        Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
-        Route_1 == "Intravenous" ~ 'IV agent continued',    
+        Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2  ~ paste0(Route_2, " ", Name_2,  "continued"),    
         Route_1 == Route_2 & Name_1 != Name_2  ~ paste0('Agent switched to ', Name_2),
         Route_1 == Route_2 & Dose_1 != Dose_2 & Frequency_1 != Frequency_2 & Name_1 == Name_2 ~ paste0('Regiment changed to ', Dose_2, " ",Frequency_2),
         Route_1 =="Intravenous" & Route_2 == "Intravenous" & ARK.category_2 == "FINAL" ~ paste0('Finalised as IV ', Name_2),
         Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3) & ARK.category_2 == "FINAL" ~ paste0('Finalised as Oral ', Name_2),
         Prescription.end_1 < Prescription.start_2 + 1 ~ paste0(Route_1, " to ", Route_2, " switch"),
         Prescription.end_1 > Prescription.start_2 + 6 ~ paste0(Route_2, " " ,Name_2, " added"),
-        Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
-    Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
-    Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
-    Route_1 =="Oral" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
+     is.na(Route_2)  & Prescription_Length_1 <=72 ~ paste0('Stopped as ', Route_1, ' within 72 hours'),
+     is.na(Route_2) & Prescription_Length_1 > 72 ~ paste0('Stopped as ', Route_1, ' beyond 72 hours'),
+     Decision_1 == "IV and Oral started" # then becomes what decision three would look AT
         
         #Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2  ~ 'No Change'
         
@@ -433,6 +429,25 @@ Then compare them against each other
 percent_in_week_stopped <- data.frame(rx_in_week$Prescription.start) %>%  mutate(percent_short = rx_under_week_stopped$n/rx_in_week$n *100)
 ```
 
+Same as above but only select IV antibiotics
+
+```{r}
+rx_under_week_stopped_IV <- select(single_rx, c(Prescription.start_1,Prescription_Length_1,Route_1))
+rx_under_week_stopped_IV <- rx_under_week_stopped_IV %>%  filter(Route_1 =="Intravenous" )
+rx_under_week_stopped_IV$Prescription.start_1 <- 
+  (floor_date(rx_under_week_stopped_IV$Prescription.start_1, "week")) 
+rx_under_week_stopped_IV <- rx_under_week_stopped_IV %>% mutate(short_rx = Prescription_Length_1 <= 72)
+rx_under_week_stopped_IV <- rx_under_week_stopped_IV %>% 
+  filter(short_rx == TRUE) 
+rx_under_week_stopped_IV <- rx_under_week_stopped_IV %>%  group_by(Prescription.start_1)  %>%  count(short_rx)
+
+```
+
+Then compare them against each other
+
+```{r}
+percent_in_week_stopped_IV <- data.frame(rx_in_week$Prescription.start) %>%  mutate(percent_short = rx_under_week_stopped_IV$n/rx_in_week$n *100)
+```
 # Data Visualisation
 
 Make a graph of the most common antibiotics used on lilac
@@ -502,7 +517,16 @@ percent_in_week_stopped %>%
     labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Antibiotic Courses Stopped Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
     geom_bar(stat = "identity", colour = "black", fill = "pink")
 ```
+Then look at just IV
+```{r IV }
+percent_in_week_stopped_IV %>% 
+    ggplot(aes(x = rx_in_week.Prescription.start, y = percent_short)) +
+    ylim(0,100)+
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Antibiotic Courses Stopped Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "IV only") +
+    geom_bar(stat = "identity", colour = "black", fill = "pink")
+```
 Then we can work out the number of people who had their prescription changed to another agent, and what percentage of those people had their first switch in <=72 hours.
+
 
 ```{r}
 #get all courses where the second decision was that the drug was switched
@@ -530,34 +554,7 @@ percent_in_week_switched %>%
     geom_bar(stat = "identity", colour = "black", fill = "pink")
 ```
 
-Find the proportion of all prescriptions that were an IV to oral switch within 72 hours, within each week
 
-```{r}
-#get all courses where the first decision was IV to oral
-rx_switched <- ark_results %>%  filter(grepl("Intravenous to Oral*", Decision_2))
-#floor by week to group them together
-rx_switched$Prescription.start_1 <- floor_date(rx_switched$Prescription.start_1, "week")
-#then take those and count how many there were each week
-rx_switched_week <- rx_switched %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
-#then select only the short ones
-rx_switched_short <-rx_switched %>%  filter(Prescription_Length_1 <= 72)
-#then count how many there were each week
-rx_switched_short_week <- rx_switched_short %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
-#then compare them 
-percent_in_week_switched <- data.frame(rx_switched_week$Prescription.start_1) %>%  mutate(percent_short = rx_switched_short_week$n/rx_in_week[1:10,2] *100)
-
-```
-
-Make a graph
-
-```{r}
-percent_in_week_switched %>% 
-    ggplot(aes(x = rx_switched_week.Prescription.start_1, y = percent_short$n)) +
-   ylim(0,25)+
-    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "IV to Oral switches that were within 72 Hours of the start of a course, as a percentage of all antibiotic courses | Lilac Ward Dec '21 - Mar '22") +
-    geom_bar(stat = "identity", colour = "black", fill = "pink")
-```
-what about all IV to oral switches
 
 ```{r IV to Oral switches done within 72 hours}
 #get all courses where the first decision was IV to oral switch
