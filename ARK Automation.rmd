@@ -76,10 +76,10 @@ Clean_Data <- filter(Clean_Data, Prescription.end < as.POSIXct("2022-12-31 00:00
 
 
   
-#remove any stat, bleed, prophylactic abx, leg cramps, hepatic encephalopathy
+#remove any stat, bleed, prophylactic abx, leg cramps, hepatic encephalopathy, SIADH or nystatin rx
   Clean_Data <- Clean_Data %>%
     filter(!(grepl("*BLEED*", Reason.given) | grepl("*PROPHY*", Reason.given) | grepl("*CRAMP*", Reason.given) | 
-               grepl("MS", Reason.given) | grepl("*ONCE*", Frequency) | grepl("H.ENCEPH*", Reason.given) | grepl("*HEPATIC ENCEPHALOPATHY*", Reason.given)))
+               grepl("MS", Reason.given) | grepl("*ONCE*", Frequency) | grepl("H.ENCEPH*", Reason.given) | grepl("*HEPATIC ENCEPHALOPATHY*", Reason.given) | grepl("NYSTATIN", Name) | grepl("NYSTAN", Name) | grepl("SIADH", Reason.given)))
 
 ```
 
@@ -215,7 +215,7 @@ This groups the data by person and by the indication (as in ARK antibiotics shou
 
 As ARK wants us to record the decisions that were made between each prescription, such as IV to Oral, Oral to IV or stopped.
 
-```{r}
+```{r Interval Calculation}
 abx_per_indication <- abx_per_indication %>% 
   mutate(interval_1 = interval(Prescription.start_1, Prescription.start_2) / hours (1),
          interval_2 = interval(Prescription.start_2, Prescription.start_3) / hours (1),
@@ -224,49 +224,70 @@ abx_per_indication <- abx_per_indication %>%
          interval_5 = interval(Prescription.start_1, Prescription.start_6) / hours (1),
   )
 
+```
+
+
+```{r Decision Making}
 
 #classify each change as per ARK protocol
+
+#firstly, what was actually commenced
 abx_per_indication <- abx_per_indication %>% 
   mutate(Decision_1 = case_when(
-    Route_1 =="Intravenous" & Route_2 =="Oral" & Prescription.start_2 > Prescription.end_1 ~ 'IV to Oral Switch',
-    Route_1 =="Oral" & Route_2 =="Intravenous" & Prescription.start_2 > Prescription.end_1  ~ 'Oral to IV Switch',
     Route_1 == "Intravenous" & Route_2 == "Intravenous" & interval_1 < 12 & 
       Prescription_Length_1 > 12 ~ 'Dual IV therapy started',
     Route_1 == "Intravenous" &  Route_2 == "Oral" & interval_1 < 12 & 
       Prescription_Length_1 > 12 ~ 'IV and Oral started',
     Route_1 =="Oral" & Route_2 == "Intravenous" & interval_1 < 12 ~ "IV and Oral started",
-    Route_1 =="Intravenous" & Route_2 == "Intravenous" & is.na(Route_3)  ~ 'Finalised as IV',
-    Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3)  ~ 'Finalised as Oral',
-    Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
-    Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
-    Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
-    Route_1 =="Oral" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
-    Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
-      Route_1 == "Oral" ~ 'Oral agent continued',
-    Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
-      Route_1 == "Intravenous" ~ 'IV agent continued',    
-    Route_1 == Route_2 & Name_1 != Name_2  ~ ('Agent changed'),
-    Route_1 == Route_2 & Dose_1 != Dose_2 & Frequency_1 != Frequency_2 ~ ('Regiment changed'),
+    interval_1 > 12  ~ paste0(Route_1, " started"),
+    
+
                                 TRUE ~ 'something else'
   ))
 
 temp <- abx_per_indication %>% select(c(Name_1,Route_1,Prescription.start_1, Prescription.end_1, Decision_1, Name_2, Route_2, Prescription.start_2,Prescription.end_2,interval_1))
 
+#what happened after the initial prescription
+
 abx_per_indication <- abx_per_indication %>% 
-  mutate(Decision_2 = case_when(Route_2 =="Intravenous" & Route_3 =="Oral" ~ 'IV to Oral Switch',
-                                Route_2 =="Oral" & Route_3 =="Intravenous"  ~ 'Oral to IV Switch',
-                                Route_2 =="Intravenous" & Route_3 == "Intravenous" & is.na(Route_4)  ~ 'Finalised as IV',
-                                Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 <=72 ~ 'Stopped as IV within 72 hours',
-                                Route_2 =="Oral" & is.na(Route_3)  & Prescription_Length_2 <=72 ~ 'Stopped as Oral within 72 hours',
-                                Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as IV beyond 72 hours',
-                                Route_2 =="Oral" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as Oral beyond 72 hours',
-                                Route_2 =="Oral" & is.na(Route_3)  ~ 'Stopped as Oral',
-                                Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3  ~ 'No Change',
-                                Route_2 == Route_3 & Name_2 != Name_3  ~ 'Agent changed',
-                                Decision_1 == "Finalised as Oral" | Decision_1 == "Finalised as IV"  ~ (""),
-                                Route_2 == Route_3 & Dose_2 != Dose_3 | Frequency_2 != Frequency_3 ~ ('Regiment changed'),
-                                TRUE ~ 'something else'
+  mutate(Decision_2 = case_when(
+        Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
+        Route_1 == "Oral" ~ 'Oral agent continued',
+        Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2 & 
+        Route_1 == "Intravenous" ~ 'IV agent continued',    
+        Route_1 == Route_2 & Name_1 != Name_2  ~ paste0('Agent switched to ', Name_2),
+        Route_1 == Route_2 & Dose_1 != Dose_2 & Frequency_1 != Frequency_2 & Name_1 == Name_2 ~ paste0('Regiment changed to ', Dose_2, " ",Frequency_2),
+        Route_1 =="Intravenous" & Route_2 == "Intravenous" & ARK.category_2 == "FINAL" ~ paste0('Finalised as IV ', Name_2),
+        Route_1 =="Oral" & Route_2 == "Oral" & is.na(Route_3) & ARK.category_2 == "FINAL" ~ paste0('Finalised as Oral ', Name_2),
+        Prescription.end_1 < Prescription.start_2 + 1 ~ paste0(Route_1, " to ", Route_2, " switch"),
+        Prescription.end_1 > Prescription.start_2 + 6 ~ paste0(Route_2, " " ,Name_2, " added"),
+        Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 <=72 ~ 'Stopped as IV within 72 hours',
+    Route_1 =="Oral" & is.na(Route_2)  & Prescription_Length_1 <=72 ~ 'Stopped as Oral within 72 hours',
+    Route_1 =="Intravenous" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as IV beyond 72 hours',
+    Route_1 =="Oral" & is.na(Route_2) & Prescription_Length_1 > 72 ~ 'Stopped as Oral beyond 72 hours',
+        
+        #Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2  ~ 'No Change'
+        
+        
   ))
+    
+    
+    
+    
+  #  Route_2 =="Intravenous" & Route_3 =="Oral" ~ 'IV to Oral Switch',
+   #                             Route_2 =="Oral" & Route_3 =="Intravenous"  ~ 'Oral to IV Switch',
+    #                            Route_2 =="Intravenous" & Route_3 == "Intravenous" & is.na(Route_4)  ~ 'Finalised as IV',
+     #                           Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 <=72 ~ 'Stopped as IV within 72 hours',
+      #                          Route_2 =="Oral" & is.na(Route_3)  & Prescription_Length_2 <=72 ~ 'Stopped as Oral within 72 hours',
+       #                         Route_2 =="Intravenous" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as IV beyond 72 hours',
+        #                        Route_2 =="Oral" & is.na(Route_3) & Prescription_Length_2 > 72 ~ 'Stopped as Oral beyond 72 hours',
+         #                       Route_2 =="Oral" & is.na(Route_3)  ~ 'Stopped as Oral',
+          #                      Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3  ~ 'No Change',
+           #                     Route_2 == Route_3 & Name_2 != Name_3  ~ 'Agent changed',
+            #                    Decision_1 == "Finalised as Oral" | Decision_1 == "Finalised as IV"  ~ (""),
+             #                   Route_2 == Route_3 & Dose_2 != Dose_3 | Frequency_2 != Frequency_3 ~ ('Regiment changed'),
+              #                  TRUE ~ 'something else'
+  #))
 
 abx_per_indication <- abx_per_indication %>% 
   mutate(Decision_3 = case_when(Route_3 =="Intravenous" & Route_4 =="Oral" ~ 'IV to Oral Switch',
@@ -278,7 +299,7 @@ abx_per_indication <- abx_per_indication %>%
                                 Route_3 =="Intravenous" & is.na(Route_4) & Prescription_Length_3 > 72 ~ 'Stopped as IV beyond 72 hours',
                                 Route_3 =="Oral" & is.na(Route_4) & Prescription_Length_3 > 72 ~ 'Stopped as Oral beyond 72 hours',
                                 Route_3 == Route_4 & Name_3 == Name_4 & Dose_3 == Dose_4 & Frequency_3 == Frequency_4  ~ 'No Change',
-                                Route_3 == Route_4 & Name_3 != Name_4  ~ ('Agent changed'),
+                                Route_3 == Route_4 & Name_3 != Name_4  ~ ('Agent switched'),
                                 
                                 Route_3 == Route_4 & Dose_3 != Dose_4 | Frequency_3 != Frequency_4 ~ ('Regiment changed'),
                                 Decision_2 == "Stopped as Oral within 72 hours" | Decision_2 == "Stopped as IV within 72 hours" | Decision_2 == "Stopped as Oral beyond 72 hours" | 
@@ -287,12 +308,6 @@ abx_per_indication <- abx_per_indication %>%
                                 TRUE ~ 'something else'
   ))
 
-#make logic for a decision "X agent added"
-abx_per_indication <- abx_per_indication %>%  mutate(Decision_1 = case_when( 
-Route_1 == "Intravenous" & Route_2 == "Intravenous" & interval(Prescription.start_1, Prescription.start_2) / hours(1) < 12 & Prescription_Length_1 > 12 ~ 'Dual IV therapy started',
- Route_1 == "Intravenous" &  Route_2 == "Oral" & interval(Prescription.start_1, Prescription.start_2) / hours(1) < 12 & Prescription_Length_1 > 12 ~ 'IV and Oral started',
-TRUE ~ "uh-oh"
-  ))
 
 
 
@@ -300,7 +315,7 @@ TRUE ~ "uh-oh"
 
 We will also be able to group people by the number of prescriptions there were in their antibiotic course;
 
-```{r}
+```{r Group by number of prescriptions}
 
 #first get rid of superfluous columns
 ark_results <- abx_per_indication %>% 
@@ -325,7 +340,7 @@ quad_rx <- ark_results %>%
 
 We want to know how long patients' total courses were, so let's do that;
 
-```{r}
+```{a mistake}
 #get rid of all missing values, then add course lengths together
 course_lengths <-  abx_per_indication 
 
@@ -335,10 +350,15 @@ course_lengths$Prescription_Length_4[is.na(course_lengths$Prescription_Length_4)
 
 
 course_lengths <- course_lengths %>%  mutate( course_length = (Prescription_Length_1 + Prescription_Length_2 + Prescription_Length_3 + Prescription_Length_4))
+```
+
+
+```{r Calculate the total course length}
+
 
 #make course length the difference in time from the first agent being started and the last agent being finished
 
-course_lengths <- course_lengths %>%  mutate(course_length =  case_when(
+course_lengths <- abx_per_indication %>%  mutate(course_length =  case_when(
   is.na(Name_2) ~ Prescription_Length_1,
   is.na(Name_3) ~ interval(Prescription.start_1, Prescription.end_2)/ hours(1),
   is.na(Name_4) ~ interval(Prescription.start_2, Prescription.end_3)/ hours(1),
@@ -347,7 +367,7 @@ course_lengths <- course_lengths %>%  mutate(course_length =  case_when(
   
 
 
-#course_lengths <- course_lengths %>%  select(c(course_length, Prescription.start_1,Prescription.start_2,Prescription.start_3,Prescription.start_4))
+course_lengths <- course_lengths %>%  select(c(course_length, Prescription.start_1,Prescription.start_2,Prescription.start_3,Prescription.start_4))
 ```
 
 A course counts towards the month that it started in, not the month that it ended in.
@@ -485,8 +505,8 @@ percent_in_week_stopped %>%
 Then we can work out the number of people who had their prescription changed to another agent, and what percentage of those people had their first switch in <=72 hours.
 
 ```{r}
-#get all courses where the first decision was not "finalised" or "No Change" i.e the drug was switched
-rx_switched <- ark_results %>%  filter(!grepl("Finalised", Decision_1) | (!grepl("No Change", Decision_1)))
+#get all courses where the second decision was that the drug was switched
+rx_switched <- ark_results %>%  filter(grepl("*switch*", Decision_2, ignore.case = TRUE) | grepl("*change*", Decision_2, ignore.case = TRUE))
 #floor by week to group them together
 rx_switched$Prescription.start_1 <- floor_date(rx_switched$Prescription.start_1, "week")
 #then take those and count how many there were each week
@@ -506,15 +526,15 @@ Then put them into a graph!
 percent_in_week_switched %>% 
     ggplot(aes(x = rx_switched_week.Prescription.start_1, y = percent_short)) +
     ylim(0,100)+
-    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Antibiotic Courses Switched Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "Proportion of Antibiotic Switches that were Within 72 Hours, Lilac Ward Dec '21 - Mar '22", subtitle = "Including both oral and IV regiments") +
     geom_bar(stat = "identity", colour = "black", fill = "pink")
 ```
 
 Find the proportion of all prescriptions that were an IV to oral switch within 72 hours, within each week
 
 ```{r}
-#get all courses where the first decision was not "finalised" or "No Change" i.e the drug was switched
-rx_switched <- ark_results %>%  filter(grepl("IV to Oral Switch", Decision_1))
+#get all courses where the first decision was IV to oral
+rx_switched <- ark_results %>%  filter(grepl("Intravenous to Oral*", Decision_2))
 #floor by week to group them together
 rx_switched$Prescription.start_1 <- floor_date(rx_switched$Prescription.start_1, "week")
 #then take those and count how many there were each week
@@ -524,7 +544,7 @@ rx_switched_short <-rx_switched %>%  filter(Prescription_Length_1 <= 72)
 #then count how many there were each week
 rx_switched_short_week <- rx_switched_short %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
 #then compare them 
-percent_in_week_switched <- data.frame(rx_switched_week$Prescription.start_1) %>%  mutate(percent_short = rx_switched_short_week$n/rx_in_week[1:13,2] *100)
+percent_in_week_switched <- data.frame(rx_switched_week$Prescription.start_1) %>%  mutate(percent_short = rx_switched_short_week$n/rx_in_week[1:10,2] *100)
 
 ```
 
@@ -538,4 +558,27 @@ percent_in_week_switched %>%
     geom_bar(stat = "identity", colour = "black", fill = "pink")
 ```
 what about all IV to oral switches
+
+```{r IV to Oral switches done within 72 hours}
+#get all courses where the first decision was IV to oral switch
+rx_switched <- ark_results %>%  filter(grepl("Intravenous to Oral*", Decision_2))
+#floor by week to group them together
+rx_switched$Prescription.start_1 <- floor_date(rx_switched$Prescription.start_1, "week")
+#then take those and count how many there were each week
+rx_switched_week <- rx_switched %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
+#then select only the short ones
+rx_switched_short <-rx_switched %>%  filter(Prescription_Length_1 <= 72)
+#then count how many there were each week
+rx_switched_short_week <- rx_switched_short %>%  group_by(Prescription.start_1) %>%  count(Prescription.start_1)
+#then compare them 
+percent_in_week_switched <- data.frame(rx_switched_week$Prescription.start_1) %>%  mutate(percent_short = rx_switched_short_week$n/rx_switched_week$n *100)
+```
+
+```{r}
+percent_in_week_switched %>% 
+    ggplot(aes(x = rx_switched_week.Prescription.start_1, y = percent_short)) +
+   ylim(0,100)+
+    labs(x = "Month", y = "Percentage of rx <= 72 hours", title = "IV to Oral switches that were within 72 Hours of the start of a course | Lilac Ward Dec '21 - Mar '22") +
+    geom_bar(stat = "identity", colour = "black", fill = "pink")
+```
 
