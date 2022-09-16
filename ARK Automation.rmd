@@ -225,7 +225,7 @@ As ARK wants us to record the decisions that were made between each prescription
 To speed up processing time during testing just take a sample of 100 patients
 
 ```{r}
-#abx_per_indication = abx_per_indication[sample(1:nrow(abx_per_indication),100),]
+abx_per_indication = abx_per_indication[sample(1:nrow(abx_per_indication),500),]
 ```
 
 ```{r Interval Calculation}
@@ -253,7 +253,7 @@ remove_all_na <- function(data){
 
 
 #try it by a decision tree
-node0 <- abx_per_indication
+node0 <- abx_per_indication %>% ungroup()
 #was there only one prescription?
 node1a <- node0 %>%  #yes
   filter(is.na(Name_2)) %>% remove_all_na()
@@ -272,7 +272,7 @@ node1b <- abx_per_indication %>% #no
 nrow(node2a)/ (nrow(node2a)+nrow(node2b))*100 #% of single rx which were stopped within 72hrs
   
   
-  #was the initial rx a double rx
+  #was the initial rx a double rx (started less than one hour from each other)
   node2c <- node1b %>% #yes
     filter(interval(Prescription.start_1,Prescription.start_2)/hours(1) <= 1) %>% 
     remove_all_na()
@@ -292,7 +292,7 @@ nrow(node2c)/ (nrow(node2c)+nrow(node2d))*100  #%of rx courses >=2 that were dou
         filter(!Route_1 == "Intravenous") %>% #no
         remove_all_na()
       
-nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the first prescription as IV
+nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the first prescription as single IV
 
 
       #if double rx then was total course length >=3?
@@ -300,15 +300,67 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
         filter(!is.na(Name_3)) %>% remove_all_na() #yes
       
       node3d <- node2c %>% 
-        filter(is.na(Name_3)) %>% remove_all_na() #no
+        filter(is.na(Name_3)) %>% remove_all_na() #
+      #if there was one rx and it was rx for less than 72 hours, was it IV?
+      node3e <- node2a %>% 
+        filter(Route_1 == "Intravenous") %>% remove_all_na() #yes
+      node3f <- node2a %>% 
+        filter(!Route_1 == "Intravenous") %>% remove_all_na()    #no  
+      #if there was one rx and it was longer than 72 hrs wa it IV?
+      node3g <- node2b %>% 
+        filter(Route_1 == "Intravenous") %>%  remove_all_na() #yes
+      node3h <- node2b %>% 
+        filter(!Route_1 == "Intravenous") %>%  remove_all_na() #no 
         #if double rx with more than 3, were both initial drugs the same route?
         
         node4a <- node3c %>% 
           filter(Route_1 == Route_2) %>% remove_all_na() #yes
         node4b <- node3c %>% 
           filter(!Route_1 == Route_2) %>% remove_all_na() #no
+        
+        #if double rx with less than 3, were both initial drugs same route?
+        node4c <- node3d %>% 
+          filter(Route_1 == Route_2) %>% remove_all_na() #yes
+        node4d <- node3d %>% 
+          filter(!Route_1 == Route_2) %>% remove_all_na() #no        
+        
+        
+        # if same route, was it IV (double rx more than 3 in course)
+          node5a <- node4a %>% 
+            filter(Route_1 == "Intravenous") %>% remove_all_na() #yes
+          node5b <- node4a %>% 
+            filter(!Route_1 == "Intravenous") %>% remove_all_na() #no
+        #if not same route, were either stopped before 72 hours (double rx more than 3 in course, different routes)
+          node5c <- node4b %>% 
+            filter(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72) %>% remove_all_na() # yes
+          node5d <- node4b %>% 
+            filter(!(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72)) %>% remove_all_na() # no
+        #if same route, was it IV (double rx less than 3 in course)
+          node5e <- node4c %>% 
+            filter(Route_1 == "Intravenous") %>% remove_all_na() #yes (double IV, <3 course)
+          node5f <- node4c %>% 
+            filter(!Route_1 == "Intravenous") %>% remove_all_na() #no )(double oral, <3 course)
+          
+           #if same route, were either stopped before 72 hours (double rx < 3 in course, different routes)
+          node5g <- node4c %>% 
+            filter(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72) %>% remove_all_na() # yes
+          node5h <- node4c %>% 
+            filter(!(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72)) %>% remove_all_na() # no
+          
+          
+          # if not same route and either stopped before 72 hours, were they both stopped at the same time? i.e within 6 hours of each other  (double rx more than 3 in course, different routes)
+            node6a <- node5c %>% 
+              filter(interval(Prescription.end_1, Prescription.end_2)/hours(1)<= 1) %>% remove_all_na() # yes
+            node6b <- node5c %>% 
+              filter(!interval(Prescription.end_1, Prescription.end_2)/hours(1)<= 1)%>% remove_all_na() # no
+                #if not same route, and either were stopped before 72 but not stopped at the same time, was the IV stopped first?  (double rx more than 3 in course)
+              node7a <- node6b %>% 
+                filter(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1) %>% 
+                remove_all_na() # yes
+              node7b <- node6b %>% 
+                filter(!(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1)) %>% remove_all_na() #no
 
-
+          
 ```
 
 ```{r Decision 1}
@@ -733,5 +785,25 @@ percent_in_week_switched %>%
 
 
 
+```{r}
+node3e %>% group_by(Reason.given) %>% count() %>% ungroup() %>% top_n(.,5) %>% 
+  ggplot(aes(x=reorder(Reason.given,-n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Indication", y = "Prescriptions", title ="Number of courses which were single IV rx, stopped within 72 hrs ")#one rx, less than 72 hrs, IV
+node3f %>% group_by(Reason.given) %>% count() %>% ungroup() %>% top_n(.,5) %>% 
+  ggplot(aes(x=reorder(Reason.given,-n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Indication", y = "Prescriptions", title ="Number of courses which were single oral rx, stopped within 72 hrs ")  #one rx less than 72 hours oral
+
+node3g %>% group_by(Reason.given) %>% count() %>% ungroup() %>% top_n(.,4) %>%
+  ggplot(aes(x=reorder(Reason.given,-n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Indication", y = "Prescriptions", title ="Number of courses which were single IV rx, stopped beyond 72 hrs ")#one rx, less than 72 hrs, IV
+node3h %>% group_by(Reason.given) %>% count() %>% ungroup() %>% top_n(.,5) %>% 
+  ggplot(aes(x=reorder(Reason.given,-n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Indication", y = "Prescriptions", title ="Number of courses which were single oral rx, stopped beyond 72 hrs ")  #one rx less than 72 hours oral
+
+```
 
 
