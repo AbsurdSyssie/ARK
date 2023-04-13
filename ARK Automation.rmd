@@ -20,12 +20,22 @@ Call libraries, set numbers not to display as exponents and import raw data
 library(tidyverse)
 library(dplyr)
 library(lubridate)
+library(clock)
 library(ggplot2)
 library(ggthemes)
 library(knitr)
+library(readxl)
+library(plotly)
 options(scipen = 999)
-raw_data <- read.csv(file = "RAW_DATA\\Data Extract.csv")
-Clean_Data <- raw_data 
+
+# Load and rename columns of the raw data
+raw_data <- read_excel("~/R Projects/CQUIN 2/Raw_Data/CQUIN 2 Part 1 (with spell no).xlsx") %>%
+  rename(NHS. = PER_NHS_NO, Prescription.start = `Prescription start`, 
+         Prescription.end = `Prescription end`, Reason.given = `Reason given`, 
+         ARK.category = `ARK category`)
+
+Clean_Data <- raw_data
+
 ```
 
 ## Data Tidying
@@ -50,12 +60,16 @@ As the date columns come in character format, we need to convert them into date 
 
 ```{r date format and rx length}
 #make columns dates not characters
-Clean_Data$Prescription.start <- dmy_hm(Clean_Data$Prescription.start) 
-Clean_Data$Prescription.end <- dmy_hm(Clean_Data$Prescription.end)
+
+Clean_Data$Prescription.start <- ymd_hms(Clean_Data$Prescription.start) 
+Clean_Data$Prescription.end <- ymd_hms(Clean_Data$Prescription.end)
+
+# Clean_Data$Prescription.start <- dmy_hm(Clean_Data$Prescription.start) 
+# Clean_Data$Prescription.end <- dmy_hm(Clean_Data$Prescription.end)
 
 
 #make all character columns same case to reduce number of duplicates and ease readability
-
+Clean_Data$Rea
 Clean_Data$Reason.given <-str_to_upper(Clean_Data$Reason.given, locale ="en") 
 Clean_Data$Name <-str_to_title(Clean_Data$Name, locale ="en")
 Clean_Data$Route <-str_to_title(Clean_Data$Route, locale ="en")
@@ -99,7 +113,7 @@ Clean_Data <- filter(Clean_Data, Prescription.end < as.POSIXct("2022-12-31 00:00
 
 #### **Regular expressions**
 
-Use some regex to normalise common indication names, remove ambiguous abbreviations and correct for some spelling mistakes
+Use some regex to normalise common indication names, remove ambiguous abbreviations and correct for some common spelling mistakes
 
 ```{r regex}
 #make all UTIs display as Urinary Tract Infection
@@ -128,7 +142,7 @@ Use some regex to normalise common indication names, remove ambiguous abbreviati
 
 ## Data Wrangling
 
-This is where we start to manipulate and extract important information from our dataset to be used in our visualisations.
+This is where we start to manipulate and extract important information from our data set to be used in our visualisations.
 
 #### Find Pertinent Information
 
@@ -145,17 +159,32 @@ This can further inform our tidying process and clean up more commonly misspelle
 
 #### **Pivoting**
 
-Now that we have our data fairly tidy and we have the necessary information added, we want to arrange the data in a way which will reflect the way the ark project wants the data to look;
+Now that we have our data fairly tidy and we have the necessary information added, we want to arrange the data in a way which will reflect how the ark project wants the data to look;
 
 ```{r pivoting}
 
 #pivot wide
-abx_per_indication <- Clean_Data %>% arrange(Prescription.start) %>%  group_by(NHS.) %>% 
-  group_by(NHS., Reason.given) %>% 
+# abx_per_indication <- Clean_Data %>% arrange(Prescription.start) %>%  group_by(NHS.) %>% 
+#   group_by(NHS., Reason.given) %>% 
+#   mutate(rn = row_number()) %>%
+#   pivot_wider(values_from = c(Name,Route,Prescription.start,Prescription.end, Dose, 
+#                               Frequency, ARK.category, Prescription_Length ),
+#               names_from =  rn)
+
+
+# Sort Clean_Data by Prescription.start and group by NHS. and Reason.given
+abx_per_indication <- Clean_Data %>% 
+  arrange(Prescription.start) %>% 
+  group_by(NHS., Reason.given) %>%
+  
+  # Add a row number to each group
   mutate(rn = row_number()) %>%
-  pivot_wider(values_from = c(Name,Route,Prescription.start,Prescription.end, Dose, 
-                              Frequency, ARK.category, Prescription_Length ),
-              names_from =  rn)
+  
+  # Pivot the data to wide format, with one row per NHS. and Reason.given combination
+  pivot_wider(values_from = c(Name, Route, Prescription.start, Prescription.end, 
+                              Dose, Frequency, ARK.category, Prescription_Length),
+              names_from = rn)
+
 ```
 
 This groups the data by person and by the indication (as in ARK antibiotics should only be grouped by the same indication), and makes each row a course of antibiotics for an illness, rather than single prescriptions.
@@ -225,11 +254,74 @@ As ARK wants us to record the decisions that were made between each prescription
 
 To speed up processing time during testing just take a sample of x number patients
 
-```{r}
-abx_per_indication = abx_per_indication[sample(1:nrow(abx_per_indication),100),]
+```{r, simple ARK ?is this the MVP?}
+non_finalised_courses <- Clean_Data %>% 
+  arrange(Prescription.start) %>% 
+  group_by(NHS., Reason.given) %>%
+  
+  # Add a row number to each group
+  mutate(rn = row_number()) %>%
+  
+  # Pivot the data to wide format, with one row per NHS. and Reason.given combination
+  pivot_wider(values_from = c(Name, Route, Prescription.start, Prescription.end, 
+                              Dose, Frequency, ARK.category, Prescription_Length),
+              names_from = rn)
+
+
+
+# Filter out rows containing the string "FINAL"
+filtered_data <- Clean_Data %>% 
+  filter(ARK.category != "FINAL")
+
+# Calculate the percentage of rows with ARK.category != "FINAL" and Prescription_Length <= 72
+percent_short_prescriptions <- (sum(filtered_data$ARK.category != "FINAL" & filtered_data$Prescription_Length <= 72) / nrow(filtered_data)) * 100
+
+# Print the result
+cat("Percentage of rows with ARK.category != \"FINAL\" and Prescription_Length <= 72:", percent_short_prescriptions, "%\n")
+
+monthly_data <- filtered_data %>%
+  mutate(month = format(Prescription.start, "%Y-%m")) %>%
+  group_by(WARD, month) %>%
+  summarise(n_short_prescriptions = sum(ARK.category != "FINAL" & Prescription_Length <= 72),
+            n_total_prescriptions = n()) %>%
+  ungroup() %>%
+  mutate(percent_short_prescriptions = n_short_prescriptions / n_total_prescriptions * 100)
+
+# Print the resulting monthly percentages
+print(monthly_data)
+
+
+line_graph <- monthly_data %>%
+  plot_ly(.,x = ~month, y = ~percent_short_prescriptions, color = ~WARD, type = 'scatter', mode = 'lines+markers',
+          line = list(shape = 'spline', smoothing = 1.3)) %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by Ward",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+
+# Print the line graph
+print(line_graph)
+
+
+# Create a line graph of the monthly percentages using ggplot2
+ggplot(monthly_data, aes(x = month, y = percent_short_prescriptions, color = WARD)) +
+  geom_line(size = 1.5, aes(group = WARD), alpha = 0.8) +
+  geom_point(size = 3, alpha = 0.8) +
+  scale_color_manual(values = c("#4B0082", "#1E90FF", "#2E8B57", "#FF8C00", "#FF1493", "#00CED1")) +
+  theme_minimal() +
+  labs(title = "Monthly Percentages of Short Antibiotic Prescriptions by Ward",
+       x = "Month",
+       y = "Percentage of Short Antibiotic Prescriptions")
+
+
+bar_graph <- monthly_data %>%
+  plot_ly(x = ~month, y = ~percent_short_prescriptions, color = ~WARD, type = 'bar') %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by Ward",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+
 ```
 
-```{r Interval Calculation}
+```{ Interval Calculation}
 abx_per_indication <- abx_per_indication %>% 
   mutate(interval_1 = interval(Prescription.start_1, Prescription.start_2) / hours (1),
          interval_2 = interval(Prescription.start_2, Prescription.start_3) / hours (1),
@@ -257,17 +349,17 @@ remove_all_na <- function(data){
 node0 <- abx_per_indication %>% ungroup()
 #was there only one prescription?
 node1a <- node0 %>%  #single rx course
-  filter(is.na(Name_2)) %>% remove_all_na()
+  filter(is.na(Name_2)) 
 
 node1b <- abx_per_indication %>% #multiple rx course
-  filter(!is.na(Name_2)) %>% remove_all_na()
+  filter(!is.na(Name_2)) 
 
 #if there was only one prescription was it prescribed for less than 72hours?
   node2a <- node1a %>% 
     filter(Prescription_Length_1 <= 72) #single rx course, <72hr
   
   node2b <- node1a %>% 
-    filter(Prescription_Length_1 > 72) %>% remove_all_na()#single rx course, >72hr
+    filter(Prescription_Length_1 > 72) #single rx course, >72hr
 
   
 nrow(node2a)/ (nrow(node2a)+nrow(node2b))*100 #% of single rx which were stopped within 72hrs
@@ -275,23 +367,22 @@ nrow(node2a)/ (nrow(node2a)+nrow(node2b))*100 #% of single rx which were stopped
   
   #was the initial rx a double rx (started less than one hour from each other)
   node2c <- node1b %>% #double rx
-    filter(interval(Prescription.start_1,Prescription.start_2)/hours(1) <= 1) %>% #
-    remove_all_na()
+    filter(between(interval(Prescription.start_1, Prescription.start_2)/hours(1),-1,1))    
   
   node2d <- node1b %>% #single initial rx
-    filter(!interval(Prescription.start_1,Prescription.start_2)/hours(1) <= 1) %>% 
-    remove_all_na()
+    filter(!between(interval(Prescription.start_1, Prescription.start_2)/hours(1),-1,1))
+    
 
 nrow(node2c)/ (nrow(node2c)+nrow(node2d))*100  #%of rx courses >=2 that were double rx
   
 {      #if not double rx,was the first rx IV?
       node3a <- node2d %>% 
-        filter(Route_1 == "Intravenous") %>% #single initial rx which was IV
-        remove_all_na()
+        filter(Route_1 == "Intravenous")  #single initial rx which was IV
+        
       
       node3b <- node2d %>% 
-        filter(!Route_1 == "Intravenous") %>% #single initial rx which was oral
-        remove_all_na()
+        filter(!Route_1 == "Intravenous")  #single initial rx which was oral
+        
       
 nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the first prescription as single IV
 
@@ -309,13 +400,13 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
       leaf1 <- node3e %>% mutate(decision = "Stopped <72")
       node3f <- node2a %>% 
         filter(!Route_1 == "Intravenous")    #single rx, short, oral - outcome stopped within 72hrs
-      leaf2 <- node3d %>% mutate(decision = "Stopped <72")
+      leaf2 <- node3f %>% mutate(decision = "Stopped <72")
       #if there was one rx and it was longer than 72 hrs wa it IV?
       node3g <- node2b %>% 
-        filter(Route_1 == "Intravenous") %>%  remove_all_na() #single rx, long, IV - outcome not changed or stopped within 72hrs
+        filter(Route_1 == "Intravenous")    #single rx, long, IV - outcome not changed or stopped within 72hrs
       leaf3 <- node3g %>% mutate(decision = "Not Reviewed")
       node3h <- node2b %>% 
-        filter(!Route_1 == "Intravenous") %>%  remove_all_na() #single rx, long, oral - outcome not changed or stopped within 72hrs
+        filter(!Route_1 == "Intravenous")   #single rx, long, oral - outcome not changed or stopped within 72hrs
       leaf4 <- node3h %>% mutate(decision = "Not Reviewed")
       }
         #if double rx with more than 3, were both initial drugs the same route?
@@ -334,11 +425,11 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
          node4e <- node3a %>% 
           filter(Prescription_Length_1 <=72) #single initial rx, course >1, IV, reviewed <72
          node4f <- node3a %>% 
-          filter(Prescription_Length_1 >72) #single initial rx, course >1, IV, reviewed >72
+          filter(Prescription_Length_1 >72) #single initial rx, course >1, IV, reviewed >72 - outcome not reviewed
          node4g <- node3b %>% 
           filter(Prescription_Length_1 <=72) #single initial rx, course >1, oral, reviewed <72
          node4h <- node3b %>% 
-          filter(Prescription_Length_1 >72) #single initial rx, course >1, oral, reviewed >72
+          filter(Prescription_Length_1 >72) #single initial rx, course >1, oral, reviewed >72 - outcome not reviewed
           
         }
         
@@ -356,23 +447,24 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
         #if same route, was it IV (double rx less than 3 in course)
           node5e <- node4c %>% 
             filter(Route_1 == "Intravenous") #double rx, <3 course, both IV
+          
           node5f <- node4c %>% 
             filter(!Route_1 == "Intravenous") #double rx, <3 course, both oral
       }     
       {  #if not same route, were either stopped before 72 hours (double rx <3 in course, different routes)
           node5g <- node4d %>% 
-            filter(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72) %>% 
-            remove_all_na() # double rx, course <3, mixed routes, either was stopped <72
+            filter(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72) 
+             # double rx, course <3, mixed routes, either was stopped <72
           
           node5h <- node4d %>% 
-            filter(!(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72)) %>% 
-            remove_all_na() # double rx, course <3, mixed routes, neither stopped <72
+            filter(!(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72)) 
+             # double rx, course <3, mixed routes, neither stopped <72
          
           
            #single initial IV, course >1, reviewed < 72 hrs, next rx same? (i.e same route, drug, dose and frequency) 
           node5i <- node4e %>% 
             filter(Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2) #initial IV, course >1, rev < 72, rx kept same
-          leaf5 <- node5i %>% remove_all_na() %>% mutate(decision = "No change")                                                                                 #this will allow for reviews after 6 hrs to count,
+          leaf5 <- node5i  %>% mutate(decision = "No Change")                                                                                 #this will allow for reviews after 6 hrs to count,
                                                                                                           #should it be a minimum of  day? A decision has still been made 
                                                                                                           #also what is the upper limit - is it exactly 72 hrs?
           
@@ -382,15 +474,17 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
            #single initial IV, course >1, reviewed > 72 hrs, next rx same? (i.e same route, drug, dose and frequency) 
           node5k <- node4f %>% 
             filter(Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2) #initial IV, course >1, rev > 72, rx kept same
-          leaf6 <- node5k %>% mutate(decision = "No change >72")                                                                                             
+          leaf6 <- node5k %>% mutate(decision = "Not Reviewed")                                                                                             
           
           node5l <- node4f %>% 
             filter(!(Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2)) #initial IV, course >1, rev > 72, rx changed
+          leaf6b <- node5k %>% mutate(decision = "Not Reviewed")
                    
            #single initial oral, course >1, reviewed < 72 hrs, next rx same? (i.e same route, drug, dose and frequency) 
           node5m <- node4g %>% 
             filter(Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2) #initial oral, course >1, rev < 72, rx kept same
                         # **LEAF**
+          leaf7 <- node5m %>%  mutate(decision = "No Change")
                                                                                                           
           
           node5n <- node4g %>% 
@@ -400,7 +494,7 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
           node5o <- node4h %>% 
             filter(Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2) #initial oral, course >1, rev > 72, rx kept same
                                 # **LEAF**
-                                                                                                           
+            leaf8 <- node5o %>% mutate(decision = "Not Reviewed")                                                                                               
           
           node5p <- node4h %>% 
             filter(!(Route_1 == Route_2 & Name_1 == Name_2 & Dose_1 == Dose_2 & Frequency_1 == Frequency_2)) #initial oral, course >1, rev > 72, rx changed
@@ -423,8 +517,11 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
              #if same route, were either stopped before 72 hours (double rx < 3 in course, both IV)
             node6c <- node5e %>% 
               filter(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72) #double rx, course <3, both IV, either stopped before 72hrs 
+            
             node6d <- node5e %>% 
-              filter(!(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72)) #double rx, course <3, both IV, neither stopped before 72hrs            
+              filter(!(Prescription_Length_1 <=72 | Prescription_Length_2 <= 72)) #double rx, course <3, both IV, neither stopped before 72hrs  
+            #leaf - Not Reviewed
+            leaf14 <- node6d %>%  mutate(decision = "Not Reviewed")
     
             # if mixed route, course <3, and either stopped before 72 hours, were they both stopped at the same time? i.e within 6 hours of each other  
           #(double rx more than 3 in course, different routes)
@@ -432,6 +529,8 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
               filter(between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) #double rx, course <3, mixed route, either stopped <72
                                                                                                         #stopped at same time - outcome; reviewed <72 hrs and both stopped
                                                                                                         # **LEAF**
+            leaf9 <- node6e %>% mutate(decision = "Stopped")
+            
             node6f <- node5g %>% 
               filter(!between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) #double rx, course <3, mixed route, either stopped <72
                                                                                                         #stopped separately
@@ -472,81 +571,92 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
             node6q <- node5j %>% #initial IV, course >1, rev < 72, rx changed, was it switched to oral? **LEAF**
               filter(Route_2 == "Oral") #initial IV, course >1, rev < 72, rx changed, switched to oral
             
+            leaf10 <- node6q %>%  mutate(decision = "IV to Oral Switch")
+            
             node6r <- node5j %>% 
               filter(!Route_2 == "Oral") #initial IV, course >1, rev < 72, rx changed, not switched to oral
             
             node6s <- node5l %>%  #initial IV, course >1, rev > 72, rx changed
               filter(Route_2 == "Oral") #changed to oral>72hrs      ***LEAF**
+            leaf11 <- node6s %>%  mutate(decision = "Not Reviewed")
            
              node6t <- node5l %>% 
               filter(!Route_2 == "Oral")#not changed to oral
             
              node6u <- node5n %>%  #initial oral, course >1, rev < 72, rx changed
                filter(Route_2 == "IV") #changed to IV **LEAF**
+             leaf12 <- node6u %>% mutate(decision = "Broader")
              
              node6v <- node5n %>%  #initial oral, course >1, rev < 72, rx changed
                filter(!Route_2 == "IV") #not changed to IV
              
              node6w <- node5p %>% #initial oral, course >1, rev > 72, rx changed
                filter(Route_2 == "IV") #changed to IV **LEAF**
+             
                
              node6x <- node5p %>% #initial oral, course >1, rev > 72, rx changed
                filter(!Route_2 == "IV") #not changed to IV
              }
-  {            node7a <- node6a %>% #double rx, course >=3, mixed route, either stopped <72, stopped at same time
+              node7a <- node6a %>% #double rx, course >=3, mixed route, either stopped <72, stopped at same time
                 filter(!is.na(Route_4) ) #more than one more rx
+              
               node7b <- node6a %>% 
                 filter(is.na(Route_4)) #not more than one more rx
               
               
             #if not same route, and either were stopped before 72 but not stopped at the same time, was the IV stopped first?  (double rx more than 3 in course)
               node7c <- node6b %>% 
-                filter(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1) %>% 
-                   remove_all_na() #double rx, course >=3, mixed route, either stopped <72, stopped separately, IV stopped first
+                filter(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1)  
+                    #double rx, course >=3, mixed route, either stopped <72, stopped separately, IV stopped first
               node7d <- node6b %>% 
-                filter(!(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1)) %>%
-                    remove_all_na() #double rx, course >=3, mixed route, either stopped <72, stopped separately, oral stopped first
+                filter(!(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1)) 
+                     #double rx, course >=3, mixed route, either stopped <72, stopped separately, oral stopped first
               
                              # if same route, course <3, and either stopped before 72 hours, were they both stopped at the same time? i.e within 6 hours of each other
               node7e <- node6c %>% 
-                filter(between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) %>% 
-                  remove_all_na() #double rx, course <3, both IV, either stopped before 72hrs 
+                filter(between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) 
+                   #double rx, course <3, both IV, either stopped before 72hrs 
+              leaf13 <- node6c %>%  mutate(decision = "Stopped")
                                                                                                   #stopped together- outcome; reviewed <72hrs and both stopped
+                                                                                                  # **LEAF**
               
               node7f <- node6c %>%              
-                filter(!between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6))%>% 
-                  remove_all_na() #double rx, course <3, both IV, either stopped before 72hrs
-                                                                                                          #stopped separately  
+                filter(!between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6))
+                   #double rx, course <3, both IV, either stopped before 72hrs
+                                                                                                          #stopped separately **LEAF** ?narrower
+              leaf14 <- node7f %>%  mutate(decision = "Narrower")
                 
                 # if same route, course <3, and either stopped before 72 hours, were they both stopped at the same time? i.e within 6 hours of each other
               node7g <- node6d %>% 
-                filter(between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) %>% 
-                  remove_all_na() #double rx, course <3, both IV, neither stopped before 72hrs 
+                filter(between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) 
+                   #double rx, course <3, both IV, neither stopped before 72hrs 
                                                                                                   #stopped together- outcome; reviewed <72hrs and both stopped
+                                                                                                  # **LEAF** not reviewed but treatment stopped
+                                                                                                  
               
               node7h <- node6d %>%              
-                filter(!between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6))%>% 
-                  remove_all_na() #double rx, course <3, both IV, neither stopped before 72hrs
-                                                                                                          #stopped separately 
+                filter(!between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6))
+                   #double rx, course <3, both IV, neither stopped before 72hrs
+                                                                                                          #stopped separately **LEAF** not reviewed
               
               
                           #mixed route, and either were stopped before 72 but not stopped at the same time, was the IV stopped first?  (double rx more < 3 in course)
-  }
+  
               
 {              
               #double rx, course <3, mixed route, either stopped <72, stopped separately, was the IV stopped first?
-              node7g <- node6f %>% 
-                filter(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1) %>% 
-                remove_all_na() #double rx, course <3, mixed route, either stopped <72, stopped separately, IV stopped first
-              node7h <- node6f %>% 
-                filter(!(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1)) %>% 
-                remove_all_na() #double rx, course <3, mixed route, either stopped <72, stopped separately, oral stopped first
+              node7i <- node6f %>% 
+                filter(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1)  
+                 #double rx, course <3, mixed route, either stopped <72, stopped separately, IV stopped first **LEAF** Narrower
+              node7j <- node6f %>% 
+                filter(!(Route_1 == "Intravenous" & Prescription.end_1 < Prescription.end_2 | Route_2 == "Intravenous" & Prescription.end_2<Prescription.end_1))  
+                 #double rx, course <3, mixed route, either stopped <72, stopped separately, oral stopped first **LEAF**
               
               #double rx, course >=3, both IV, either stopped <72, stopped together?
-              node7i <- node6g %>% 
+              node7k <- node6g %>% 
                 filter(between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) #double rx, course >=3, both IV, either stopped <72, stopped together
               
-              node7j <- node6g %>% 
+              node7l <- node6g %>% 
                  filter(!between(interval(Prescription.end_1, Prescription.end_2)/hours(1),-6,6)) #double rx, course >=3, both IV, either stopped <72, not stopped together
           
               }
@@ -572,10 +682,191 @@ nrow(node3a)/ (nrow(node3a)+nrow(node3b))*100 #% of rx courses >=2 that had the 
                 node8d <- node7b %>% 
                    filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx not same as one of the first
                            (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3)))
+                
+                node8e <- node7c %>% #double rx, course >=3, mixed route, either stopped <72, stopped separately, IV stopped first, more than one more rx?
+                  filter(!is.na(Route_4)) #more than one more rx
+                node8f <- node7c %>% 
+                  filter(is.na(Route_4)) #not more than one more rx
+                
+                node8g <- node7d %>% #double rx, course >=3, mixed route, either stopped <72, stopped separately, oral stopped first, more than one more rx?
+                  filter(!is.na(Route_4)) #more than one more rx
+                node8h <- node7d %>% 
+                  filter(is.na(Route_4)) #not more than one more rx 
+    
+                node8i <- node7k %>%  #double rx, course >=3, both IV, either stopped <72, stopped together, more than one more rx?
+                  filter(!is.na(Route_4)) #more than one more rx
+                node8j <- node7k %>% 
+                  filter(is.na(Route_4)) #not more than one more rx
+                node8k <- node7l %>%   #double rx, course >=3, both IV, either stopped <72, not stopped together, more than one more rx?
+                  filter(!is.na(Route_4)) #more than one more rx
+                node8l <- node7l %>% 
+                  filter(is.na(Route_4)) #not more than one more rx
+
+                  node9a <- node8b %>%  #double rx, course >=3, mixed route, either stopped <72, stopped at same time, more than one more rx, not same as both previous
+                     filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #one of last rx same as one of the first
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))
+                           |
+                           (Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4))  
+                  
+                  node9b <- node8b %>% 
+                    filter(!(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #neither of final rx same as one of the first
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))
+                           |
+                           ((Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4)))) 
+                  
+                  node9c <- node8c %>%  #double rx, course >=3, mixed route,either stopped <72, stopped at same time, not more than one more rx, final rx same as one of first
+                       #was it the oral one?
+                    filter(Route_3 == "Oral")# **LEAF** oral continued ?narrowed
+                  
+                  node9d <- node8c %>%  
+                       #was it the oral one?
+                    filter(!Route_3 == "Oral")# **LEAF** IV continued ?narrowed
+                  
+                  node9e <- node8d %>%  #double rx, course >=3, mixed route, either stopped <72, stopped at same time, not more than one more rx, not same as first two
+                      #was it oral
+                    filter(Route_3 == "Oral") #it was oral **LEAF** ?narrowed (could be more detailed - was it the same drug but different route or dose?)
+                  node9f <- node8d %>% 
+                    filter(!Route_3 == "Oral") #it was not oral **LEAF** ?broadened (if not piptaz then narrowed? Can add another node)
+                  
+               {  node9g <- node8e %>%  #double rx, course >=3, mixed route, either stopped <72, stopped separately, IV stopped first, more than one more rx
+                     filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #one of last rx same as one of the first
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))
+                           |
+                           (Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4))  
+                  
+                  node9h <- node8e %>% 
+                    filter(!(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #neither of final rx same as one of the first
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))
+                           |
+                           ((Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4))))
+                 
+                   node9i <- node8f %>%  #double rx, course >=3, mixed route, either stopped <72, stopped separately, IV stopped first, not more than one more rx
+                          #was the final rx the same as either of the first?
+                     filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))) 
+                    
+                   node9j <- node8f %>% 
+                     filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx not same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3)))
+                   
+                   node9k <-node8g %>%  #double rx, course >=3, mixed route, either stopped <72, stopped separately, oral stopped first, more than one more rx
+                      filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #one of last rx same as one of the first
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))
+                           |
+                           (Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4))  
+                  
+                  node9l <- node8g %>% 
+                    filter(!(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #neither of final rx same as one of the first
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))
+                           |
+                           ((Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4))))
+                  
+                  node9m <- node8h %>%  #double rx, course >=3, mixed route, either stopped <72, stopped separately, oral stopped first, not more than one more rx 
+                   filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))) 
+                    
+                   node9n <- node8h %>% 
+                     filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx not same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3)))
+
+                  node9o <- node8i %>% #double rx, course >=3, both IV, either stopped <72, stopped together, more than one more rx 
+                        #were the next two rx the same as the first two
+                        #next two the same **LEAF**
+                  filter((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3 & 
+                            Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4) | 
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3 & 
+                              Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)) 
+                
+                node9p <- node8i %>% 
+                  #next two not both same
+                   filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3 &
+                             Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4) |
+                            (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3 & 
+                               Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)))
+                
+                node9q <- node8j %>%  #double rx, course >=3, both IV, either stopped <72, stopped together, not more than one more rx
+                  filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))) 
+                    
+                node9r <- node8j %>% 
+                   filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx not same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3)))
+               
+                 node9s <- node8k %>% #double rx, course >=3, both IV, either stopped <72, not stopped together, more than one more rx
+                  #were the next two rx the same as the first two
+                        #next two the same **LEAF**
+                  filter((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3 & 
+                            Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4) | 
+                           (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3 & 
+                              Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)) 
+                
+                node9t <- node8k %>% 
+                  #next two not both same
+                   filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3 &
+                             Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4) |
+                            (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3 & 
+                               Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)))
+                  
+                
+                
+                node9u <- node8l %>%  #double rx, course >=3, both IV, either stopped <72, not stopped together, not more than one more rx
+                  filter(((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))) 
+                    
+                node9v <- node8l %>% 
+                  filter(!((Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #final rx not same as one of the first
+                               (Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3)))
+                }
+                  node10a <- node9a %>%  #double rx, course >=3, mixed route, either stopped <72, stopped at same time, more than one more rx, not same as both previous, one same as previous
+                    #was it the oral one?
+                     filter(((Route_1 == "Oral" & Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #initial oral cont
+                           (Route_2 == "Oral" & Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))   #initial IV discont
+                           |
+                           ((Route_1 == "Oral" & Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == "Oral" & Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4))) 
+                  node10b <- node9a %>% #it was not the oral one
+                    filter(!(((Route_1 == "Oral" & Route_1 == Route_3 & Name_1 == Name_3 & Dose_1 == Dose_3 & Frequency_1 == Frequency_3)| #initial oral discont
+                           (Route_2 == "Oral" & Route_2 == Route_3 & Name_2 == Name_3 & Dose_2 == Dose_3 & Frequency_2 == Frequency_3))    #initial IV cont
+                           |
+                           ((Route_1 == "Oral" & Route_1 == Route_4 & Name_1 == Name_4 & Dose_1 == Dose_4 & Frequency_1 == Frequency_4)| 
+                           (Route_2 == "Oral" & Route_2 == Route_4 & Name_2 == Name_4 & Dose_2 == Dose_4 & Frequency_2 == Frequency_4)))) 
+ #double rx, course >=3, mixed route, either stopped <72, stopped at same time, more than one more rx, not same as both previous, neither same as previous
+                 # node10c <- node9b %>% #were they IV or Oral? (assuming if IV then stayed broad, oral narrowed, maybe if piptaz then broadened)
+                    
+                    
 ```
 
 ```{r leaves}
-leaf5 <- node5i %>% remove_all_na() %>% mutate(decision = "No change") 
+leaf1 <- node3e %>% mutate(decision = "Stopped") %>% remove_all_na()
+leaf2 <- node3f %>% mutate(decision = "Stopped") %>% remove_all_na()
+leaf3 <- node3g %>% mutate(decision = "Not Reviewed")%>% remove_all_na()
+leaf4 <- node3h %>% mutate(decision = "Not Reviewed")%>% remove_all_na()
+leaf5 <- node5i %>% mutate(decision = "No change")   %>% remove_all_na()
+leaf6 <- node5k %>% mutate(decision = "Not Reviewed")%>% remove_all_na()
+leaf6b<- node5l %>% mutate(decision = "Not Reviewed") %>% remove_all_na()
+leaf7 <- node5m %>% mutate(decision = "Continued")   %>% remove_all_na()
+leaf8 <- node5o %>% mutate(decision = "Not Reviewed")%>% remove_all_na()
+leaf9 <- node6e %>% mutate(decision = "Stopped")     %>% remove_all_na()
+leaf10 <- node6q %>%  mutate(decision = "IV to Oral Switch")  %>% remove_all_na()
+leaf11 <- node6s %>%  mutate(decision = "Not Reviewed") %>% remove_all_na()
+leaf12 <- node6u %>% mutate(decision = "Broader") %>% remove_all_na()
+leaf13 <- node6c %>%  mutate(decision = "Stopped") %>% remove_all_na()
+leaf14 <- node6d %>%  mutate(decision = "Not Reviewed") %>% remove_all_na()
+
+
+results <- bind_rows(list(leaf1,leaf2,leaf3,leaf4,leaf5,leaf6,leaf6b,leaf7,leaf8,leaf9,leaf10,leaf11,leaf12,leaf13,leaf14))
+results %>% group_by(decision) %>% count()
+results %>% floor_date(.$Prescription.start_1, unit = "weeks") #%>% group_by(Prescription.start_1, decision)
+
+
+
+
 ```
 
 
@@ -1046,7 +1337,264 @@ bind_rows(list(node2b,node2a), .id = "id") %>%
  labs(title = "Single prescription abx courses by route and course length", 
       x = "", 
       y ="")
+
 #this shows that if a pt receives just one rx, it most likely to stop within 72 hours if it is IV, rather than oral. ?are oral rx being allowed to continue for longer as the prescribers see them as less damaging ?IV rx are being stopped within 72 hours most of the time, which is good ?Does this suggest that most people who are being put on a single IV prescription are being put on them too easily 
+
+
+results_by_week <- results 
+results_by_week$Prescription.start_1 <- floor_date(results_by_week$Prescription.start_1, "weeks")
+
+results_by_week %>% group_by(Prescription.start_1, decision) %>% count() %>% group_by(Prescription.start_1) %>% 
+   mutate(pcnt = n/sum(n)) %>% 
+  ggplot(aes(x= Prescription.start_1,
+             y=pcnt,
+             fill = decision))+
+  geom_col()+
+  scale_x_datetime(breaks = "week",  limits = c(min(results_by_week$Prescription.start_1)-days(4), max(results_by_week$Prescription.start_1)+days(4)))+
+ 
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Decision at 72 hours",
+       y = "",
+       x="")
+
+results_by_week %>% filter(decision == "Stopped") %>%  group_by(Prescription.start_1, decision, ARK.category_1) %>% count() %>% 
+   group_by(Prescription.start_1) %>% 
+   mutate(pcnt = n/sum(n)) %>% 
+  
+  ggplot(aes(x= Prescription.start_1,
+             y=pcnt,
+             fill = ARK.category_1))+
+  geom_col()+
+  scale_x_datetime(breaks = "week",  limits = c(min(results_by_week$Prescription.start_1)-days(4), max(results_by_week$Prescription.start_1)+days(4)))+
+ 
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Where decision was to stop, what % by ark category",
+       y = "",
+       x="")
+
+results_by_week_ARK <- results_by_week %>% filter(ARK.category_1 != "") %>% group_by(ARK.category_1,Prescription.start_1, decision) %>% count()
+results_by_week_ARK  %>%   
+  group_by(ARK.category_1,Prescription.start_1, decision) %>% filter(decision == "Stopped") %>%  count() %>%
+    mutate(pcnt = n/sum(results_by_week_ARK$n)) %>% kable()
+
+    group_by(Prescription.start_1, ARK.category_1) %>% 
+      filter(decision == "Stopped") %>% kable()
+      mutate(pcnt = n/sum(n)) %>% kable() 
+  
+  
+  ggplot(aes(x= Prescription.start_1,
+             y=pcnt,
+             fill = ARK.category_1))+
+  geom_col()+
+  scale_x_datetime(breaks = "week",  limits = c(min(results_by_week$Prescription.start_1)-days(4), max(results_by_week$Prescription.start_1)+days(4)))+
+ 
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Where decision was to stop, what % by ark category",
+       y = "",
+       x="")
+  fig <- results_by_week %>% group_by(Prescription.start_1, decision) %>% count() %>% group_by(Prescription.start_1) %>% 
+   mutate(pcnt = n/sum(n)) %>% 
+    plot_ly(x = ~Prescription.start_1,
+                    y = ~pcnt*100,
+                    color = ~decision,
+                    type = "bar") 
+
+    fig <- fig %>% layout(barmode = "stack") 
+```
+
+
+```{r GPT}
+
+# First, let's create an empty dataframe to store our decisions
+decisions <- data.frame(matrix(ncol = 0, nrow = nrow(abx_per_indication)))
+
+# Iterate over each row in the dataframe
+for (i in 1:nrow(abx_per_indication)) {
+  
+  # Create a list to store the decisions for this row
+  row_decisions <- list()
+  
+  # Loop over each prescription in this course
+  for (j in 1:14) {
+    
+    # If this is the first prescription in the course, just record the details
+    if (j == 1) {
+      row_decisions[[j]] <- list(Name = abx_per_indication$Name_1[i],
+                                 Route = abx_per_indication$Route_1[i],
+                                 Dose = abx_per_indication$Dose_1[i],
+                                 Frequency = abx_per_indication$Frequency_1[i],
+                                 Start = abx_per_indication$Prescription.start_1[i],
+                                 End = abx_per_indication$Prescription.end_1[i])
+    } else {
+      
+      # Check if this prescription starts at the same time as the previous one
+      time_diff <- as.numeric(abx_per_indication$Prescription.start_[i, j] - abx_per_indication$Prescription.end_[i, j-1])
+      
+      if (time_diff <= 3600) {
+        # The two prescriptions start at the same time, so we only need to record the changes
+        row_decisions[[j]] <- compare_prescriptions(abx_per_indication[i, j-1], abx_per_indication[i, j])
+      } else {
+        # There is a gap between the two prescriptions, so we need to record the previous prescription ending and the new one starting
+        row_decisions[[j-0.5]] <- list(Action = "Stopped",
+                                        Name = abx_per_indication$Name_[i, j-1],
+                                        Route = abx_per_indication$Route_[i, j-1],
+                                        Dose = abx_per_indication$Dose_[i, j-1],
+                                        Frequency = abx_per_indication$Frequency_[i, j-1],
+                                        End = abx_per_indication$Prescription.end_[i, j-1])
+        row_decisions[[j+0.5]] <- list(Action = "Started",
+                                        Name = abx_per_indication$Name_[i, j],
+                                        Route = abx_per_indication$Route_[i, j],
+                                        Dose = abx_per_indication$Dose_[i, j],
+                                        Frequency = abx_per_indication$Frequency_[i, j],
+                                        Start = abx_per_indication$Prescription.start_[i, j])
+      }
+    }
+  }
+  
+  # Combine the decisions for this row into a single list and add it to the decisions dataframe
+  decisions[i, 1] <- list(row_decisions)
+}
+
+# Define a function to compare two prescriptions and return any differences as a list of decisions
+compare_prescriptions <- function(prescription1, prescription2) {
+  
+  # Initialize an empty list to store the decisions
+  decisions <- list()
+  
+  # Compare the medication name, dose, and route
+  if (prescription1$Name != prescription2$Name) {
+    decisions$medication <- paste("Medication changed from", prescription1$Name, "to", prescription2$Name)
+  }
+  if (prescription1$Dose != prescription2$Dose) {
+    decisions$dose <- paste("Dose changed from", prescription1$Dose, "to", prescription2$Dose)
+  }
+  if (prescription1$Route != prescription2$Route) {
+    decisions$route <- paste("Route changed from", prescription1$Route, "to", prescription2$Route)
+  }
+  
+  # Compare the start and end times
+  time_difference <- as.numeric(difftime(prescription2$Prescription.start, prescription1$Prescription.end, units = "mins"))
+  if (time_difference >= 60) {
+    decisions$start_time <- paste("New medication started at", format(prescription2$Prescription.start, "%Y-%m-%d %H:%M:%S"))
+  }
+  if (prescription1$Prescription.end != prescription2$Prescription.end) {
+    decisions$end_time <- paste("Medication stopped at", format(prescription1$Prescription.end, "%Y-%m-%d %H:%M:%S"), 
+                                "and replaced by", format(prescription2$Prescription.start, "%Y-%m-%d %H:%M:%S"))
+  }
+  
+  # Compare the frequency
+  if (prescription1$Frequency != prescription2$Frequency) {
+    decisions$frequency <- paste("Frequency changed from", prescription1$Frequency, "to", prescription2$Frequency)
+  }
+  
+  # Return the list of decisions
+  return(decisions)
+}
+
+
+
+```
+```{r GPT 4}
+library(dplyr)
+library(tidyr)
+
+decisions <- abx_per_indication %>%
+  rowwise() %>%
+  mutate(
+    # Combine all Prescription.start columns into a list
+    start_list = list(c(Prescription.start_1, Prescription.start_2, Prescription.start_3, Prescription.start_4,
+                       Prescription.start_5, Prescription.start_6, Prescription.start_7, Prescription.start_8,
+                       Prescription.start_9, Prescription.start_10, Prescription.start_11, Prescription.start_12,
+                       Prescription.start_13, Prescription.start_14)),
+    # Combine all Prescription.end columns into a list
+    end_list = list(c(Prescription.end_1, Prescription.end_2, Prescription.end_3, Prescription.end_4,
+                     Prescription.end_5, Prescription.end_6, Prescription.end_7, Prescription.end_8,
+                     Prescription.end_9, Prescription.end_10, Prescription.end_11, Prescription.end_12,
+                     Prescription.end_13, Prescription.end_14)),
+    # Combine all Frequency columns into a list
+    frequency_list = list(c(Frequency_1, Frequency_2, Frequency_3, Frequency_4, Frequency_5, 
+                           Frequency_6, Frequency_7, Frequency_8, Frequency_9, Frequency_10,
+                           Frequency_11, Frequency_12, Frequency_13, Frequency_14)),
+    # Combine all Dose columns into a list
+    dose_list = list(c(Dose_1, Dose_2, Dose_3, Dose_4, Dose_5, Dose_6, Dose_7, Dose_8,
+                      Dose_9, Dose_10, Dose_11, Dose_12, Dose_13, Dose_14)),
+    # Combine all Route columns into a list
+    route_list = list(c(Route_1, Route_2, Route_3, Route_4, Route_5, Route_6, Route_7, Route_8,
+                        Route_9, Route_10, Route_11, Route_12, Route_13, Route_14)),
+    name_list = list(c(Name_1, Name_2, Name_3, Name_4,
+                       Name_5, Name_6, Name_7, Name_8,
+                       Name_9, Name_10, Name_11, Name_12,
+                       Name_13, Name_14)),
+    # Calculate decisions for the current row
+    decision_list = list(calculate_decisions(start_list, end_list, frequency_list, route_list, dose_list, name_list))
+      ) %>%
+      select(SPELL_NUMBER, decision_list, Reason.given) %>%
+      unnest(decision_list) %>%
+      group_by(SPELL_NUMBER,Reason.given) %>% 
+  mutate(decision_id = row_number()) %>% 
+      pivot_wider(
+        names_from = decision_id,
+        values_from = decision_list,
+        names_prefix = "decision_"
+      ) %>%
+      complete(fill = list(decision_list = ""))
+
+
+calculate_decisions <- function(start_list, end_list, frequency_list, route_list, dose_list, name_list) {
+  decisions <- list()
+  for (i in 1:(length(start_list) - 1)) {
+    decision <- ""
+    if (is.na(start_list[[i]]) || is.na(start_list[[i+1]])) {
+    break
+  }
+    if (!is.na(name_list[[i]]) & !is.na(name_list[[i + 1]]) & name_list[[i]] != name_list[[i + 1]]) {
+      decision <- paste0(decision, "agent_changed;")
+    }
+
+    if (!is.na(route_list[[i]]) & !is.na(route_list[[i + 1]]) & route_list[[i]] != route_list[[i + 1]]) {
+      if (route_list[[i]] == "Intravenous" & route_list[[i + 1]] == "Oral" & end_list[[i]] < end_list[[i+1]] + 1) {
+        decision <- paste0(decision, "IV_to_Oral;")
+      } else if (route_list[[i]] == "Oral" & route_list[[i + 1]] == "Intravenous"& end_list[[i]] < end_list[[i+1]] + 1) {
+        decision <- paste0(decision, "Oral_to_IV;")
+      }
+    }
+
+    if (!is.na(dose_list[[i]]) & !is.na(dose_list[[i + 1]]) & dose_list[[i]] != dose_list[[i + 1]]) {
+      decision <- paste0(decision, "dose_changed;")
+    }
+
+    if (!is.na(frequency_list[[i]]) & !is.na(frequency_list[[i + 1]]) & frequency_list[[i]] != frequency_list[[i + 1]]) {
+      decision <- paste0(decision, "frequency_changed;")
+    }
+
+    if (abs(as.numeric(difftime(start_list[[i]], start_list[[i + 1]], units = "hours"))) <= 1) {
+      decision <- paste0(decision, "start_together;")
+    }
+
+    if (abs(as.numeric(difftime(end_list[[i]], end_list[[i + 1]], units = "hours"))) <= 1) {
+      decision <- paste0(decision, "end_together;")
+    }
+
+    if (as.numeric(difftime(end_list[[i]], end_list[[i + 1]], units = "hours")) > 1) {
+      decision <- paste0(decision, "end_before;")
+    }
+
+    if (as.numeric(difftime(start_list[[i + 1]], end_list[[i]], units = "hours")) < 1) {
+      decision <- paste0(decision, "added_before_end;")
+    }
+
+    if (!is.na(route_list[[i + 1]]) & as.numeric(difftime(start_list[[i + 1]], end_list[[i]], units = "hours")) < 1) {
+      if (route_list[[i + 1]] == "Intravenous") {
+        decision <- paste0(decision, "new_IV_added;")
+      } else if (route_list[[i + 1]] == "Oral") {
+        decision <- paste0(decision, "new_Oral_added;")
+      }
+    }
+
+    decisions <- c(decisions, list(decision))
+  }
+  return(decisions)
+}
 
 ```
 

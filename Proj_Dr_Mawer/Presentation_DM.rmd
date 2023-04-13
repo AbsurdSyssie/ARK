@@ -1,0 +1,553 @@
+---
+title: "ARK 72 Hour Review Automation"
+author: "Oscar Daniel"
+date: '2023-03-28'
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r packages, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(clock)
+library(ggplot2)
+library(ggthemes)
+library(knitr)
+library(readxl)
+library(plotly)
+options(scipen = 999)
+
+```
+
+# Importing and Cleaning Data
+
+The first thing to do with the data we got from IT is to import it and try to clean it. We need to;
+
+-   Anonymise NHS numbers
+
+-   Make dates correct format
+
+-   Calculate the prescription lengths
+
+-   Remove prescriptions that didn't have at least two administrations
+
+-   Remove duplicates
+
+-   Remove indications that are not antimicrobial.
+
+-   Reformat indications to be consistent and easy to read
+
+```{r import and clean, echo=TRUE}
+raw_data <- read_excel("~/R Projects/CQUIN 2/Raw_Data/CQUIN 2 Part 1 (with spell no).xlsx")
+raw_data <- raw_data %>% rename(NHS. = PER_NHS_NO, 
+                                Prescription.start = `Prescription start`, 
+                                Prescription.end = `Prescription end`, 
+                                Reason.given = `Reason given`, 
+                                ARK.category = `ARK category` )
+
+  #read.csv(file = "RAW_DATA\\Data Extract.csv")
+Clean_Data <- raw_data 
+
+
+PID <- Clean_Data %>%                                        # Create ID by group
+  group_by(NHS.) %>%
+  mutate(ID = cur_group_id())
+Clean_Data$NHS. <- PID$ID
+
+
+
+Clean_Data$Prescription.start <- ymd_hms(Clean_Data$Prescription.start)
+Clean_Data$Prescription.end <- ymd_hms(Clean_Data$Prescription.end)
+
+Clean_Data$Reason.given <-str_to_upper(Clean_Data$Reason.given, locale ="en") 
+Clean_Data$Name <-str_to_title(Clean_Data$Name, locale ="en")
+Clean_Data$Route <-str_to_title(Clean_Data$Route, locale ="en")
+Clean_Data <- Clean_Data %>%  filter(!is.na(Reason.given))
+
+Clean_Data$Prescription_Length <- interval(Clean_Data$Prescription.start, Clean_Data$Prescription.end) / hours(1)
+
+ Clean_Data <- filter(Clean_Data, Frequency == "THREE times a DAY" & Prescription_Length > 8 | 
+                        Frequency == "FOUR times a DAY" & Clean_Data$Prescription_Length > 6 | 
+                        Frequency == "TWICE a DAY" & Prescription_Length > 12)
+
+ Clean_Data <- Clean_Data %>%
+              group_by(NHS., 
+                       SPELL_NUMBER,
+                       ORG_NAME,
+                      Prescription.start,
+                      Prescription.end,
+                       Name,
+                       Dose,
+                       Frequency,
+                       Route,
+                      Reason.given,
+                      ARK.category) %>% slice(1) %>% ungroup()
+ 
+Clean_Data <- Clean_Data[!duplicated(Clean_Data), ]
+
+Clean_Data <- filter(Clean_Data, Prescription.start >= as.POSIXct("2021-12-01 00:00"))
+
+Clean_Data <- filter(Clean_Data, Prescription.end < as.POSIXct("2022-12-31 00:00"))
+
+ Clean_Data <- Clean_Data %>%
+    filter(!(grepl("*BLEED*", Reason.given) | grepl("*PROPHY*", Reason.given) | grepl("*CRAMP*", Reason.given) | 
+               grepl("MS", Reason.given) | grepl("*ONCE*", Frequency) | grepl("H.ENCEPH*", Reason.given) | grepl("*HEPATIC ENCEPHALOPATHY*", Reason.given) | grepl("NYSTATIN", Name) | grepl("NYSTATIN", Name) | grepl("SIADH", Reason.given) | grepl("^Amantadine", Name)))
+ 
+ 
+ #make all UTIs display as Urinary Tract Infection
+  Clean_Data$Reason.given <- gsub( "UTI", "URINARY TRACT INFECTION",Clean_Data$Reason.given) 
+  
+  #make all community acquired pneumonia display as CAP
+  Clean_Data$Reason.given <- gsub("CAP", "COMMUNITY ACQUIRED PNEUMONIA", Clean_Data$Reason.given)
+  
+  #make all IEoCOPD as IECOPD
+  Clean_Data$Reason.given <- gsub("IECOPD", "INFECTIVE EXACERBATION OF CHRONIC OBSTRUCTIVE PULMONARY DISEASE", Clean_Data$Reason.given) 
+  
+  #make all LRTI full name
+  Clean_Data$Reason.given <- gsub("LRTI", "LOWER RESPIRATORY TRACT INFECTION", Clean_Data$Reason.given) 
+  #make any blank indications "Unrecorded"
+  Clean_Data$Reason.given <- sub("^$", "UNRECORDED", Clean_Data$Reason.given)
+  
+  #correct common spelling mistakes
+  Clean_Data$Reason.given <- gsub("PYONEPHRITIS", "PYELONEPHRITIS", Clean_Data$Reason.given)
+  
+  Clean_Data$Reason.given <- replace(Clean_Data$Reason.given,grep("DIFF",Clean_Data$Reason.given),"CLOSTRIDIUM DIFFICILE")
+    
+  
+  Clean_Data$Reason.given <- str_to_title(Clean_Data$Reason.given)
+
+
+```
+
+# Data Manipulation
+
+Now we need to change the data so that it gives us what we want. We want to see antibiotic courses, not individual prescriptions. We do this by grouping prescriptions by NHS, spell number and indication.
+
+```{r pivoting, echo=TRUE}
+
+#pivot wide
+abx_per_indication <- Clean_Data %>% arrange(Prescription.start) %>% #group_by(NHS.)
+  group_by(NHS.,SPELL_NUMBER, Reason.given) %>% 
+  mutate(rn = row_number()) %>%
+  pivot_wider(values_from = c(Name,Route,Prescription.start,Prescription.end, Dose, 
+                              Frequency, ARK.category, Prescription_Length, WARD, ORG_NAME ),
+              names_from =  rn)
+```
+
+Then we select courses where the ARK indication of the first prescription was not final and only take the information about the first prescription.
+
+```{r, echo=TRUE}
+
+first_rx <- abx_per_indication %>% 
+  filter(ARK.category_1 != "FINAL") %>% 
+  select(SPELL_NUMBER,NHS.,Reason.given,Name_1,Route_1,Frequency_1,Dose_1,ORG_NAME_1,WARD_1,Prescription.start_1,Prescription.end_1,Prescription_Length_1, ARK.category_1)
+
+```
+
+Then we can look at what proportion of these prescriptions were reviewed within 72 hours.
+
+```{r, warning=FALSE, echo=TRUE}
+
+# Calculate the percentage of rows with Prescription_Length <= 72
+percent_short_prescriptions <- round((sum(first_rx$Prescription_Length_1 <= 72) / nrow(first_rx)) * 100, digits=1)
+
+# Print the result
+cat("Percentage of rows with ARK.category != \"FINAL\" and Prescription_Length <= 72:", percent_short_prescriptions, "%\n")
+
+monthly_data_ward <- first_rx %>%
+  mutate(month = format(Prescription.start_1, "%Y-%m")) %>%
+  group_by(WARD_1, month) %>%
+  summarise(n_short_prescriptions = sum(ARK.category_1 != "FINAL" & Prescription_Length_1 <= 72),
+            n_total_prescriptions = n()) %>%
+  ungroup() %>%
+  mutate(percent_short_prescriptions = n_short_prescriptions / n_total_prescriptions * 100)
+
+
+monthly_data_org <- first_rx %>%
+  mutate(month = format(Prescription.start_1, "%Y-%m")) %>%
+  group_by(ORG_NAME_1, month) %>%
+  summarise(n_short_prescriptions = sum(ARK.category_1 != "FINAL" & Prescription_Length_1 <= 72),
+            n_total_prescriptions = n()) %>%
+  ungroup() %>%
+  mutate(percent_short_prescriptions = n_short_prescriptions / n_total_prescriptions * 100)
+
+
+
+line_graph_ward <- monthly_data_ward %>%
+  plot_ly(.,x = ~month, y = ~percent_short_prescriptions, color = ~WARD_1, type = 'scatter', mode = 'lines+markers',
+          line = list(shape = 'spline', smoothing = 1.3)) %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by Ward",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+
+
+line_graph_org <- monthly_data_org %>%
+  plot_ly(.,x = ~month, y = ~percent_short_prescriptions, color = ~ORG_NAME_1, type = 'scatter', mode = 'lines+markers',
+          line = list(shape = 'spline', smoothing = 1.3)) %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by Organisation",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+
+
+
+# Print the line graph
+line_graph_ward
+line_graph_org
+
+# Create a line graph of the monthly percentages using ggplot2
+plot_2 <- ggplot(monthly_data_ward, aes(x = month, y = percent_short_prescriptions, color = WARD_1)) +
+  geom_line(size = 1.5, aes(group = WARD_1), alpha = 0.8) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Monthly Percentages of Short Antibiotic Prescriptions by WARD_1",
+       x = "Month",
+       y = "Percentage of Short Antibiotic Prescriptions")
+
+#ggplotly(plot_2)
+
+bar_graph_ward <- monthly_data_ward %>%
+  plot_ly(x = ~month, y = ~percent_short_prescriptions, color = ~WARD_1, type = 'bar') %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by WARD_1",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+bar_graph_ward
+
+bar_graph_ward <- monthly_data_ward %>%
+  plot_ly(x = ~month, y = ~percent_short_prescriptions, color = ~WARD_1, type = 'bar') %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by WARD_1",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+
+
+bar_graph_org <- monthly_data_org %>%
+  plot_ly(x = ~month, y = ~percent_short_prescriptions, color = ~ORG_NAME_1, type = 'bar') %>%
+  layout(title = "Monthly Percentages of Short Antibiotic Prescriptions by Organisation",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+bar_graph_org
+
+#histogram of prescription lengths
+
+
+plot_ly(data = first_rx, x = ~Prescription_Length_1) %>% 
+  add_histogram(xbins = list(start = 0, end = 240, size = 24), 
+                marker = list(color = "green")) %>% 
+  layout(title = "Prescription Length Distribution",
+         xaxis = list(title = "Prescription Length (hours)"),
+         yaxis = list(title = "Frequency"))
+
+#top five indications 
+
+top5_reasons <- first_rx %>% 
+  ungroup() %>% 
+  count(Reason.given) %>% 
+  top_n(5, n) %>% 
+  select(Reason.given)
+
+plot_data <- first_rx %>% ungroup() %>% 
+  filter(Reason.given %in% top5_reasons$Reason.given) %>% 
+  count(Reason.given) %>% 
+  arrange(desc(n))
+
+plot_ly(data = plot_data, x = ~Reason.given, y = ~n, type = "bar", 
+        marker = list()) %>% 
+  layout(title = "Top 5 Reasons Given for Prescription",
+         
+         xaxis = list(title = "Reason Given", 
+                      categoryorder = "array", 
+                      categoryarray = plot_data$Reason.given[order(plot_data$n, decreasing = TRUE)]),
+         yaxis = list(title = "No. of Prescriptions"))
+
+```
+
+```{r}
+#bar graph showing % of rx under 72 hours by indication
+cutoff_length <- 72
+
+top5_reasons <- first_rx %>% ungroup() %>% 
+  count(Reason.given) %>% 
+  top_n(5, n) %>% 
+  select(Reason.given)
+
+plot_data <- first_rx %>% 
+  filter(Reason.given %in% top5_reasons$Reason.given) %>% 
+  group_by(Reason.given) %>% 
+  summarize(total_prescriptions = n(),
+            short_prescriptions = sum(Prescription_Length_1 <= cutoff_length)) %>% 
+  ungroup() %>% 
+  mutate(short_pct = short_prescriptions/total_prescriptions * 100,
+         long_pct = 100 - short_pct)
+
+plot_ly(data = plot_data, x = ~Reason.given, type = "bar", 
+        name = "<=72 hours", y = ~short_pct) %>% 
+  add_trace(y = ~long_pct, name = ">72 hours") %>% 
+  layout(title = "Top 5 Reasons Given for Prescription",
+         legend = list(title = list(text="Prescription Length")),
+         xaxis = list(title = "Reason Given"), 
+         yaxis = list(title = "% of Prescriptions")) %>% 
+  layout(barmode = "stack")
+
+```
+
+A table showing the wards with the lowest % of reviews each month.
+
+```{r}
+
+#worst ward by month
+
+
+lowest_ward <- monthly_data_ward %>%
+  group_by(month) %>%
+  filter(percent_short_prescriptions == min(percent_short_prescriptions)) %>%
+  select(month, WARD_1, percent_short_prescriptions)
+
+kable(lowest_ward)
+
+```
+
+```{r}
+
+avg_prescription_length <- Clean_Data %>%
+  group_by(Name) %>%
+  summarize(Avg_Prescription_Length = mean(Prescription_Length))
+
+# Create a bar chart of the average prescription length by medication
+ggplot(data = avg_prescription_length, aes(x = reorder(Name, -Avg_Prescription_Length), y = Avg_Prescription_Length)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(title = "Average Prescription Length by Medication", x = "Medication", y = "Average Prescription Length (Hours)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(data = avg_prescription_length, aes(x = reorder(Name, -Avg_Prescription_Length), y = Avg_Prescription_Length/24)) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(title = "Average Prescription Length by Medication", x = "Medication", y = "Average Prescription Length (Days)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Create a histogram of the distribution of prescription lengths
+
+# Histogram of prescription lengths
+ggplot(data = Clean_Data, aes(x = Prescription_Length)) +
+  geom_histogram(binwidth = 24, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Prescription Lengths",
+       x = "Prescription Length (hours)",
+       y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        panel.grid.major = element_line(colour = "gray80", linetype = "dashed")) +
+  scale_x_continuous(limits = c(0, max(Clean_Data$Prescription_Length)))
+  
+```
+
+```{r}
+
+# Create a subset of the data to calculate prescription length percentage
+sub_data <- first_rx %>%
+  filter(Prescription_Length_1 <= 72) %>%
+  group_by(ORG_NAME_1, WARD_1) %>%
+  summarize(pct_prescription_length = n()/nrow(first_rx) * 100)
+
+# Create the plot
+plot <- plot_ly(sub_data, x = ~ORG_NAME_1, y = ~WARD_1, size = ~pct_prescription_length, 
+                color = ~pct_prescription_length, colors = "Blues") %>%
+  add_markers()
+
+# Add axis labels and title
+plot <- plot %>% layout(xaxis = list(title = "Organisation Name"), 
+                        yaxis = list(title = "Ward"), 
+                        title = "Percentage of Prescriptions with Length <= 72 hours")
+                        
+# Show the plot
+plot
+
+
+sub_data <- first_rx %>%
+  filter(Prescription_Length_1 <= 72) %>%
+  group_by(ORG_NAME_1, WARD_1) %>%
+  summarize(pct_prescription_length = n()/nrow(first_rx) * 100)
+
+# Create the plot
+plot <- plot_ly(sub_data, x = ~ORG_NAME_1, y = ~WARD_1, size = ~pct_prescription_length, 
+                color = ~pct_prescription_length, colors = "Blues") %>%
+  add_markers()
+
+# Add axis labels and title
+plot <- plot %>%layout(yaxis = list(showticklabels = FALSE), 
+         xaxis = list(title = "Organization Name"), 
+         margin = list(l = 150, r = 20, b = 50, t = 50, pad = 4))
+                        
+# Show the plot
+plot
+
+
+```
+
+```{r heatmap}
+library(plotly)
+library(dplyr)
+library(lubridate)
+
+# Create a month column in the original dataset
+first_rx <- first_rx %>% mutate(month = floor_date(Prescription.start_1, unit = "month"))
+
+# Group the data by month and ward, and calculate the percentage of prescriptions that were less than or equal to 72 hours for each ward within each month
+pct_short_prescriptions <- first_rx %>% 
+  group_by(month, WARD_1) %>%
+  summarise(total_prescriptions = n(),
+            short_prescriptions = sum(Prescription_Length_1 <= 72)) %>%
+  mutate(pct_short = short_prescriptions / total_prescriptions * 100)
+
+# Create the heatmap
+plot_ly(data = pct_short_prescriptions, x = ~month, y = ~WARD_1, z = ~pct_short, type = "heatmap") %>%
+  layout(title = "Monthly average percentage of prescriptions that were <=72 hours by ward",
+         xaxis = list(title = "Month"),
+         yaxis = list(title = "Ward"),
+         coloraxis = list(colorscale = "reds"),
+         width = 800,
+         height = 600)
+
+```
+
+```{r}
+# Create the monthly data by organization
+monthly_data_org <- first_rx %>%
+  mutate(month = format(Prescription.start_1, "%Y-%m")) %>%
+  group_by(ORG_NAME_1, month) %>%
+  summarise(n_short_prescriptions = sum(ARK.category_1 != "FINAL" & Prescription_Length_1 <= 72),
+            n_total_prescriptions = n()) %>%
+  ungroup() %>%
+  mutate(percent_short_prescriptions = n_short_prescriptions / n_total_prescriptions * 100)
+
+# Create the heatmap
+heatmap_org <- monthly_data_org %>%
+  ggplot(aes(x = month, y = ORG_NAME_1, fill = percent_short_prescriptions)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(title = "Percentage of Short Antibiotic Prescriptions by Organization and Month",
+       x = "Month",
+       y = "Organization Name",
+       fill = "Percentage of Short Antibiotic Prescriptions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90))
+
+# Print the heatmap
+heatmap_org
+
+```
+
+```{r}
+# Create a line graph of the monthly percentages by organisation using ggplot2
+plot_3 <- ggplot(monthly_data_org, aes(x = month, y = percent_short_prescriptions, color = ORG_NAME_1)) +
+  geom_line(size = 1.5, aes(group = ORG_NAME_1), alpha = 0.8) +
+  scale_y_continuous(sec.axis = sec_axis(~./max(monthly_data_org$percent_short_prescriptions)*100, name = "Percentage of Short Antibiotic Prescriptions"), name = "Percentage of Short Antibiotic Prescriptions") +
+  theme_minimal() +
+  labs(title = "Monthly Percentages of Short Antibiotic Prescriptions by Organisation",
+       x = "Month",
+       y = "Percentage of Short Antibiotic Prescriptions")
+
+# Split the plot into facets
+plot_3 <- plot_3 + facet_wrap(~ ORG_NAME_1, scales = "free_y", ncol = 2)
+
+# Print the line graph
+plot_3
+
+
+# Set colors for the lines
+colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
+
+# Create a list to store the individual graphs
+graphs <- list()
+
+# Loop over each organization to create a line graph for each one
+for (i in 1:length(unique(monthly_data_org$ORG_NAME_1))) {
+  # Subset the data for the current organization
+  current_data <- monthly_data_org %>% filter(ORG_NAME_1 == unique(monthly_data_org$ORG_NAME_1)[i])
+  
+  # Create a new plotly line graph
+  current_graph <- plot_ly(current_data, x = ~month, y = ~percent_short_prescriptions, type = 'scatter', mode = 'lines+markers',
+                           line = list(color = colors[i], shape = 'spline', smoothing = 1.3),
+                           name = unique(monthly_data_org$ORG_NAME_1)[i], hovertemplate = paste('%{x}<br>', '%{y:.1f}%<br>')) %>%
+    layout(yaxis = list(title = "Percentage of Short Antibiotic Prescriptions", 
+                         range = c(min(monthly_data_org$percent_short_prescriptions), max(monthly_data_org$percent_short_prescriptions))),
+           xaxis = list(title = "Month"),
+           title = "Monthly Percentages of Short Antibiotic Prescriptions by Organization")
+  
+  # Add the current graph to the list of graphs
+  graphs[[i]] <- current_graph
+}
+
+# Combine the individual graphs into a single plotly object
+combined_graph <- subplot(graphs, nrows = length(unique(monthly_data_org$ORG_NAME_1)), shareX = TRUE, titleX = FALSE, titleY = FALSE) %>%
+  layout(yaxis = list(title = "Percentage of Short Antibiotic Prescriptions"))
+
+# Print the combined graph
+combined_graph
+
+```
+
+```{r weekly graphs}
+
+# Summarize by week
+weekly_data_org <- first_rx %>%
+  mutate(week = format(Prescription.start_1, "%Y-%W")) %>%
+  group_by(ORG_NAME_1, week) %>%
+  summarise(n_short_prescriptions = sum(ARK.category_1 != "FINAL" & Prescription_Length_1 <= 72),
+            n_total_prescriptions = n()) %>%
+  ungroup() %>%
+  mutate(percent_short_prescriptions = n_short_prescriptions / n_total_prescriptions * 100)
+
+weekly_data_ward <- first_rx %>%
+  mutate(week = format(Prescription.start_1, "%Y-%W")) %>%
+  group_by(WARD_1, week) %>%
+  summarise(n_short_prescriptions = sum(ARK.category_1 != "FINAL" & Prescription_Length_1 <= 72),
+            n_total_prescriptions = n()) %>%
+  ungroup() %>%
+  mutate(percent_short_prescriptions = n_short_prescriptions / n_total_prescriptions * 100)
+
+
+# Create a heatmap of the weekly percentages
+heatmap_weekly_org <- weekly_data_org %>%
+  ggplot(aes(x = week, y = ORG_NAME_1, fill = percent_short_prescriptions)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "white", name = "Percentage of Short Prescriptions") +
+  theme_minimal() +
+  ggtitle("Weekly Percentages of Short Antibiotic Prescriptions by Organisation") +
+  labs(x = "Week", y = "Organisation")
+
+# Create a heatmap of the weekly percentages
+heatmap_weekly_ward <- weekly_data_ward %>%
+  ggplot(aes(x = week, y = WARD_1, fill = percent_short_prescriptions)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "white", name = "Percentage of Short Prescriptions") +
+  theme_minimal() +
+  ggtitle("Weekly Percentages of Short Antibiotic Prescriptions by Ward") +
+  labs(x = "Week", y = "Ward")
+
+
+# Create a line graph of the weekly percentages by organisation
+line_graph_weekly_org <- weekly_data_org %>%
+  ggplot(aes(x = week, y = percent_short_prescriptions, color = ORG_NAME_1, group = ORG_NAME_1)) +
+  geom_line(size = 1.5, alpha = 0.8) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Weekly Percentages of Short Antibiotic Prescriptions by Organisation",
+       x = "Week",
+       y = "Percentage of Short Antibiotic Prescriptions") +
+  facet_wrap(~ORG_NAME_1, scales = "free_y")
+
+# Create a line graph of the weekly percentages by ward
+line_graph_weekly_ward <- weekly_data_ward %>%
+  ggplot(aes(x = week, y = percent_short_prescriptions, color = WARD_1, group = WARD_1)) +
+  geom_line(size = 1.5, alpha = 0.8) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Weekly Percentages of Short Antibiotic Prescriptions by Ward",
+       x = "Week",
+       y = "Percentage of Short Antibiotic Prescriptions") +
+  facet_wrap(~WARD_1, scales = "free_y")
+
+```
